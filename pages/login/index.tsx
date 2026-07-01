@@ -70,10 +70,10 @@ const Login: NextPage = () => {
          </Head>
          <div className='flex items-center justify-center w-full h-screen'>
             <div className='w-80 mt-[-300px]'>
-               <h3 className="py-7 text-2xl font-bold text-blue-700 text-center">
-                  <span className=' relative top-[3px] mr-1'>
-                     <Icon type="logo" size={30} color="#364AFF" />
-                  </span> s33k
+               <h3 className="py-7 text-2xl font-bold text-zinc-800 text-center">
+                  s33k<span className=' relative top-[5px] ml-[3px]'>
+                     <Icon type="logo" size={10} color="#3ED63A" />
+                  </span>
                </h3>
                <div className='relative bg-[white] rounded-md text-sm border p-5'>
                   <div className="settings__section__input mb-5">

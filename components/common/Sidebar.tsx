@@ -14,8 +14,8 @@ const Sidebar = ({ domains, showAddModal } : SidebarProps) => {
 
    return (
       <div className="sidebar pt-44 w-1/5 hidden lg:block" data-testid="sidebar">
-         <h3 className="py-7 text-base font-bold text-blue-700">
-            <span className=' relative top-[3px] mr-1'><Icon type="logo" size={24} color="#364AFF" /></span> s33k
+         <h3 className="py-7 text-base font-bold text-zinc-800">
+            s33k<span className=' relative top-[3px] ml-[2px]'><Icon type="logo" size={7} color="#3ED63A" /></span>
          </h3>
          <div className="sidebar_menu max-h-96 overflow-auto styled-scrollbar">
             <ul className=' font-medium text-sm'>
