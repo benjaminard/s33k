@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/s33k-logo.png" alt="s33k" width="160" />
+</p>
+
 # s33k
 
 s33k (reads "seek") is an open, self-hosted tool for one person to watch their own website, driven entirely from your own LLM over the Model Context Protocol (MCP). It joins the three things you check about a site into one place you control from Claude, Cursor, or any MCP client:
