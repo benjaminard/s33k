@@ -1,0 +1,24 @@
+{
+  "name": "s33k-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server that lets an LLM control s33k (SEO/AEO rank tracker) over its REST API.",
+  "type": "module",
+  "bin": {
+    "s33k-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "smoke": "node smoke-test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}

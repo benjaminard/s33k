@@ -1,0 +1,311 @@
+/* eslint-disable no-unused-vars */
+type ScrapeStrategy = 'basic' | 'custom' | 'smart'
+
+type DomainType = {
+   ID: number,
+   domain: string,
+   slug: string,
+   tags?: string,
+   notification: boolean,
+   notification_interval: string,
+   notification_emails: string,
+   lastUpdated: string,
+   added: string,
+   keywordCount?: number,
+   keywordsUpdated?: string,
+   avgPosition?: number,
+   scVisits?: number,
+   scImpressions?: number,
+   scPosition?: number,
+   search_console?: string,
+   // The /api/domains LIST response no longer ships the raw Search Console credential blob; it ships
+   // a neutral `siteId` (renamed from the internal umami_website_id column) and a boolean
+   // `searchConsoleConnected`. UI pages must detect "Search Console connected" via this boolean, NOT
+   // by JSON.parse(search_console).client_email (which the list response intentionally strips). The
+   // singular /api/domain route still returns the full per-domain config for the settings modal.
+   siteId?: string | null,
+   searchConsoleConnected?: boolean,
+   ideas_settings?: string,
+   scrape_strategy?: ScrapeStrategy | '',
+   scrape_pagination_limit?: number,
+   scrape_smart_full_fallback?: boolean,
+   subdomain_matching?: string,
+   owner_id?: number | null,
+}
+
+type KeywordHistory = {
+   [date:string] : number
+}
+
+type KeywordType = {
+   ID: number,
+   keyword: string,
+   device: string,
+   country: string,
+   domain: string,
+   lastUpdated: string,
+   added: string,
+   position: number,
+   volume: number,
+   sticky: boolean,
+   history: KeywordHistory,
+   lastResult: KeywordLastResult[],
+   url: string,
+   tags: string[],
+   updating: boolean,
+   lastUpdateError: {date: string, error: string, scraper: string} | false,
+   scData?: KeywordSCData,
+   uid?: string
+   city?: string
+   target_page?: string
+   owner_id?: number | null
+}
+
+type AccountType = {
+   ID: number,
+   name?: string,
+   plan?: string,
+   status?: string,
+   createdAt?: string,
+   updatedAt?: string,
+}
+
+type ApiKeyType = {
+   ID: number,
+   account_id: number,
+   name?: string,
+   key_prefix: string,
+   key_hash: string,
+   last_used_at?: string | null,
+   revoked_at?: string | null,
+   createdAt?: string,
+   updatedAt?: string,
+}
+
+type KeywordLastResult = {
+   position: number,
+   url: string,
+   title: string,
+   skipped?: boolean
+}
+
+type KeywordFilters = {
+   countries: string[],
+   tags: string[],
+   search: string,
+}
+
+type countryData = {
+   [ISO:string] : [countryName:string, cityName:string, language:string, AdWordsID: number]
+}
+
+type countryCodeData = {
+   [ISO:string] : string
+}
+
+type DomainSearchConsole = {
+   property_type: 'domain' | 'url',
+   url: string,
+   client_email:string,
+   private_key:string,
+   // Encrypted (cryptr + SECRET) Google OAuth refresh token set by the click-to-authorize GSC
+   // flow (/api/searchconsole/connect -> /callback). When present, the SC reads use OAuth instead
+   // of the service-account JWT. Additive and optional, so existing blobs stay valid.
+   oauth_refresh_token?: string,
+}
+
+type DomainSettings = {
+   notification_interval: string,
+   notification_emails: string,
+   search_console?: DomainSearchConsole,
+   scrape_strategy?: ScrapeStrategy | '',
+   scrape_pagination_limit?: number,
+   scrape_smart_full_fallback?: boolean,
+   subdomain_matching?: string,
+}
+
+type SettingsType = {
+   scraper_type: string,
+   scaping_api?: string,
+   proxy?: string,
+   notification_interval: string,
+   notification_email: string,
+   notification_email_from: string,
+   notification_email_from_name: string,
+   smtp_server: string,
+   smtp_port: string,
+   smtp_username?: string,
+   smtp_password?: string,
+   available_scrapers?: { label: string, value: string, allowsCity?: boolean }[],
+   scrape_interval?: string,
+   scrape_delay?: string,
+   scrape_retry?: boolean,
+   scrape_strategy?: ScrapeStrategy,
+   scrape_pagination_limit?: number,
+   scrape_smart_full_fallback?: boolean,
+   failed_queue?: string[]
+   version?: string,
+   screenshot_key?: string,
+   search_console: boolean,
+   search_console_client_email: string,
+   search_console_private_key: string,
+   search_console_integrated?: boolean,
+   adwords_client_id?: string,
+   adwords_client_secret?: string,
+   adwords_refresh_token?: string,
+   adwords_developer_token?: string,
+   adwords_account_id?: string,
+   keywordsColumns: string[]
+}
+
+type KeywordSCDataChild = {
+   yesterday: number,
+   threeDays: number,
+   sevenDays: number,
+   thirtyDays: number,
+   avgSevenDays: number,
+   avgThreeDays: number,
+   avgThirtyDays: number,
+}
+type KeywordSCData = {
+   impressions: KeywordSCDataChild,
+   visits: KeywordSCDataChild,
+   ctr: KeywordSCDataChild,
+   position:KeywordSCDataChild
+}
+
+type KeywordAddPayload = {
+   keyword: string,
+   device: string,
+   country: string,
+   domain: string,
+   tags?: string,
+   city?:string,
+   target_page?: string
+}
+
+type SearchAnalyticsRawItem = {
+   keys: string[],
+   clicks: number,
+   impressions: number,
+   ctr: number,
+   position: number,
+}
+
+type SearchAnalyticsStat = {
+   date: string,
+   clicks: number,
+   impressions: number,
+   ctr: number,
+   position: number,
+}
+
+type InsightDataType = {
+   stats: SearchAnalyticsStat[]|null,
+   keywords: SCInsightItem[],
+   countries: SCInsightItem[],
+   pages: SCInsightItem[],
+}
+
+type SCInsightItem = {
+   clicks: number,
+   impressions: number,
+   ctr: number,
+   position: number,
+   countries?: number,
+   country?: string,
+   keyword?: string,
+   keywords?: number,
+   page?: string,
+   date?: string
+}
+
+type SearchAnalyticsItem = {
+   keyword: string,
+   uid: string,
+   device: string,
+   page: string,
+   country: string,
+   clicks: number,
+   impressions: number,
+   ctr: number,
+   position: number,
+   date?: string
+}
+
+type SCDomainDataType = {
+   threeDays : SearchAnalyticsItem[],
+   sevenDays : SearchAnalyticsItem[],
+   thirtyDays : SearchAnalyticsItem[],
+   lastFetched?: string,
+   lastFetchError?: string,
+   stats? : SearchAnalyticsStat[],
+}
+
+type SCKeywordType = SearchAnalyticsItem;
+
+type DomainIdeasSettings = {
+   seedSCKeywords: boolean,
+   seedCurrentKeywords: boolean,
+   seedDomain: boolean,
+   language: string,
+   countries: string[],
+   keywords: string
+}
+
+type AdwordsCredentials = {
+   client_id: string,
+   client_secret: string,
+   developer_token: string,
+   account_id: string,
+   refresh_token: string,
+}
+
+type IdeaKeyword = {
+   uid: string,
+   keyword: string,
+   competition: 'UNSPECIFIED' | 'UNKNOWN' | 'HIGH' | 'LOW' | 'MEDIUM',
+   country: string,
+   domain: string,
+   competitionIndex : number,
+   monthlySearchVolumes: Record<string, string>,
+   avgMonthlySearches: number,
+   added: number,
+   updated: number,
+   position:number
+}
+
+type scraperExtractedItem = {
+   title: string,
+   url: string,
+   position: number,
+}
+type ScraperPagination = {
+   start: number,
+   num: number,
+   page: number,
+}
+
+interface ScraperSettings {
+   /** A Unique ID for the Scraper. eg: myScraper */
+   id:string,
+   /** The Name of the Scraper */
+   name:string,
+   /** The Website address of the Scraper */
+   website:string,
+   /** The result object's key that contains the results of the scraped data. For example,
+    * if your scraper API the data like this `{scraped:[item1,item2..]}` the resultObjectKey should be "scraped" */
+   resultObjectKey: string,
+   /** If the Scraper allows setting a precise location or allows city level scraping set this to true. */
+   allowsCity?: boolean,
+   /** Whether this scraper API handles its own pagination (e.g. num=100) and should bypass the app's pagination logic */
+   nativePagination?: boolean,
+   /** Set your own custom HTTP header properties when making the scraper API request.
+    * The function should return an object that contains all the header properties you want to pass to API request's header.
+    * Example: `{'Cache-Control': 'max-age=0', 'Content-Type': 'application/json'}` */
+   headers?(keyword:KeywordType, settings: SettingsType): Object,
+   /** Construct the API URL for scraping the data through your Scraper's API */
+   scrapeURL?(keyword:KeywordType, settings:SettingsType, countries:countryData, pagination?: ScraperPagination): string,
+   /** Custom function to extract the serp result from the scraped data. The extracted data should be @return {scraperExtractedItem[]} */
+   serpExtractor?(content:string): scraperExtractedItem[],
+}

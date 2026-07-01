@@ -1,0 +1,66 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+/.swc/
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+.vscode
+fly.toml
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+.env
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+
+#todo
+TODO
+
+#database
+data/
+
+#copilot
+.github/*.md
+mcp/node_modules
+mcp/dist
+
+#deploy resume doc (contains production API key)
+RESUME_DEPLOY.md
+
+#night build report (local only)
+NIGHT_REPORT.md
+
+#morning report (local only)
+MORNING_REPORT.md
+
+# Internal AI agent notes, never ship to the public repo
+.claude/
+
+# Build caches
+.swc/
+*.tsbuildinfo

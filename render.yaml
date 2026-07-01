@@ -1,0 +1,42 @@
+# Render Blueprint: one-click deploy of s33k (Docker web service + managed Postgres).
+# Spec: https://render.com/docs/blueprint-spec
+# Plan names and postgresMajorVersion drift over time. Confirm current values in the
+# Render dashboard if a deploy is rejected.
+services:
+  - name: s33k
+    type: web
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: s33k-db
+          property: connectionString
+      # Render generates strong random values for these on first deploy.
+      - key: APIKEY
+        generateValue: true
+      - key: SECRET
+        generateValue: true
+      - key: USER_NAME
+        value: admin
+      # Prompted from you during Blueprint creation.
+      - key: PASSWORD
+        sync: false
+      # Your own Serper key for rank tracking (or paste it in Settings after login).
+      - key: SERPER_API_KEY
+        sync: false
+      # Paste your service's public onrender.com URL here after the first deploy.
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: PORT
+        value: "3000"
+
+databases:
+  - name: s33k-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"

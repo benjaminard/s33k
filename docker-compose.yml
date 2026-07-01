@@ -1,0 +1,69 @@
+# s33k: one-command self-host. Single-user, first-party (single-beacon) analytics.
+#
+# Two services: the s33k app (built from this repo's Dockerfile) and its own Postgres.
+# Analytics is first-party: the beacon (public/s33k.js) posts to s33k's own database,
+# so there is NO separate analytics service to run.
+#
+# First run:
+#   1. ./scripts/setup-env.sh        # writes .env with strong random secrets
+#   2. docker compose up -d --build
+#   3. open http://localhost:3000    # log in, add your domain, paste your Serper key in Settings
+#
+# Prefer to set secrets by hand? cp .env.example .env, fill it in, then run step 2.
+
+services:
+  s33k:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: s33k:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      USER_NAME: ${USER_NAME:-admin}
+      # These three must be real and strong. `docker compose up` errors out with a
+      # helpful message if they are unset. Run ./scripts/setup-env.sh to generate them.
+      PASSWORD: ${PASSWORD:?set PASSWORD in .env (run ./scripts/setup-env.sh)}
+      SECRET: ${SECRET:?set SECRET in .env (run ./scripts/setup-env.sh)}
+      APIKEY: ${APIKEY:?set APIKEY in .env (run ./scripts/setup-env.sh)}
+      SESSION_DURATION: ${SESSION_DURATION:-24}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      # s33k stores everything (rankings, events, settings) in this Postgres.
+      DATABASE_URL: postgres://${POSTGRES_USER:-s33k}:${POSTGRES_PASSWORD:-s33k}@db:5432/${POSTGRES_DB:-s33k}
+      # Optional: your own Serper key for SEO rank tracking (or paste it in Settings after login).
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      # Optional: Google Search Console (service account). Safe to leave blank.
+      SEARCH_CONSOLE_CLIENT_EMAIL: ${SEARCH_CONSOLE_CLIENT_EMAIL:-}
+      SEARCH_CONSOLE_PRIVATE_KEY: ${SEARCH_CONSOLE_PRIVATE_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-s33k}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-s33k}
+      POSTGRES_DB: ${POSTGRES_DB:-s33k}
+    volumes:
+      - s33k_db_data:/var/lib/postgresql/data
+    # Not published to the host: the database is only reachable by the app on the
+    # internal compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-s33k} -d ${POSTGRES_DB:-s33k}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  s33k_db_data:

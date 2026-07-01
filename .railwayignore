@@ -1,0 +1,10 @@
+.env
+.env*.local
+.git
+node_modules
+.next
+data
+mcp/node_modules
+mcp/dist
+coverage
+*.log
