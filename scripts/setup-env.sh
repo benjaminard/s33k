@@ -42,6 +42,10 @@ POSTGRES_DB=s33k
 # Optional: your own Serper key for SEO rank tracking. You can also paste it in
 # Settings after you log in. Get one free at https://serper.dev
 SERPER_API_KEY=
+
+# Which SERP source scrapes rankings. "serper" pairs with SERPER_API_KEY above.
+# Without this the scraper stays off and keywords never get a rank.
+SCRAPER_TYPE=serper
 EOF
 
 echo "Wrote .env with fresh secrets."

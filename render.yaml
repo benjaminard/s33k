@@ -30,6 +30,9 @@ services:
       # Your own Serper key for rank tracking (or paste it in Settings after login).
       - key: SERPER_API_KEY
         sync: false
+      # Which SERP source scrapes rankings; serper pairs with the key above.
+      - key: SCRAPER_TYPE
+        value: serper
       # Paste your service's public onrender.com URL here after the first deploy.
       - key: NEXT_PUBLIC_APP_URL
         sync: false
