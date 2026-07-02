@@ -17,7 +17,8 @@ open-source repo, not an internal ops doc.
 
 ## Runtime + commands (get this right first)
 
-- **Node 20 via nvm, locally.** `jsonwebtoken` crashes on Node 25. Prefix node/npm in any shell
+- **Node 20 via nvm, locally.** The pinned toolchain (`.nvmrc`); newer Node majors have broken deps
+  here before. Prefix node/npm in any shell
   line: `export NVM_DIR="$HOME/.nvm"; source "$NVM_DIR/nvm.sh"; nvm use 20 >/dev/null 2>&1;`
 - **Tests:** `npx jest --ci` (one-shot). `npm run test` is WATCH mode, do not use it for verification.
 - **Lint:** `npm run lint` must be clean. **Build:** `npm run build` must print "Compiled successfully".
@@ -133,10 +134,24 @@ open-source repo, not an internal ops doc.
   `${NEXT_PUBLIC_APP_URL}/api/searchconsole/callback`. If they are unset, `/connect` returns a
   friendly "not configured" message, it does not crash. The whole feature is optional.
 
-### First-run setup + key drop: secrets never transit the LLM (headless direction, phase 1)
-- The headless direction: s33k is 100% MCP-driven; the hosted web UI is slated for deletion. Two
-  surfaces make that possible, and both obey one constraint: a SECRET (the Serper key) must never
-  pass through an LLM chat. Paths are browser-to-server or terminal-to-server only.
+### Headless: the web UI is DELETED; the server serves APIs, the beacon, and two one-shot pages
+- s33k is 100% MCP-driven. The web UI (pages, components, hooks, styles, services, `_app`/`_document`,
+  login/logout, the cookie/JWT session, USER_NAME/PASSWORD/SESSION_DURATION) was deleted in the
+  headless phase. What serves: `/api/*` (incl. the hosted MCP endpoint), `/s33k.js`, the GSC OAuth
+  callback, and the token-gated one-time `/setup` page. `/` is rewritten (next.config.js) to
+  `/api/root`, a small unauthenticated JSON identity response, so health checks and stray browsers
+  get a 200 instead of a Next 404.
+- **Auth is Bearer-only.** The single `process.env.APIKEY` is the whole credential story. authorize()
+  keeps the pre-headless allowlist behavior for Bearer callers; verifyUser (the legacy admin
+  surfaces: settings/clearfailed/ideas/dbmigrate/adwords) authorizes the Bearer key directly with NO
+  allowlist check, because those routes were cookie-only exactly while a cookie existed. SECRET
+  stays forever: it keys cryptr settings encryption and signs the setup/key-drop/GSC-state tokens.
+- The `/setup` page must stay CHROME-LESS (inline styles, no components): it renders with Next's
+  default `_app`/`_document` and nothing else exists to style it.
+
+### First-run setup + key drop: secrets never transit the LLM
+- Two surfaces make headless possible, and both obey one constraint: a SECRET (the Serper key) must
+  never pass through an LLM chat. Paths are browser-to-server or terminal-to-server only.
 - **/setup (the installer)** is the one browser moment. While setup is incomplete, the first
   ensureSynced() success per process prints `[SETUP] Open <base>/setup?token=... to finish setup.`
   (Next 12 pages-router standalone has NO app-level boot hook: no instrumentation.ts, and

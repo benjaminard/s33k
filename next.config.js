@@ -14,6 +14,15 @@ const nextConfig = {
   publicRuntimeConfig: {
    version,
  },
+  // Headless: the web UI is deleted, so `/` has no page. Rewrite it to the identity API route so
+  // the root returns a small JSON "this is s33k, connect over MCP" response instead of a Next 404.
+  // A plain (afterFiles) rewrite is enough: nothing in pages/ or public/ matches `/` anymore, so
+  // this always applies, and it keeps the identity response an API handler rather than a page.
+  async rewrites() {
+    return [
+      { source: '/', destination: '/api/root' },
+    ];
+  },
   // Baseline security response headers on every route. Intentionally NO Content-Security-Policy
   // and NO Cross-Origin-Embedder/Opener or Access-Control headers: the first-party tracker
   // (/s33k.js loaded via <script> on customer sites, beacons POSTed to /api/collect) is a

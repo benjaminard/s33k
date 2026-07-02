@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/s33k-logo.png" alt="s33k" width="160" />
+  <img src="docs/s33k-logo.png" alt="s33k" width="160" />
 </p>
 
 # s33k
@@ -12,9 +12,9 @@ s33k (reads "seek") is an open, self-hosted tool for one person to watch their o
 - **AI-search referrals (AEO).** Which AI engines (ChatGPT, Claude, Perplexity, Gemini, Copilot) actually send visitors to your site, measured from real referral traffic.
 - **Analytics.** Page traffic, sources, engagement, scroll depth, clicks, and form submissions, collected by s33k's own cookieless beacon.
 
-You run all of it by asking your LLM. There is no dashboard to learn for the SEO, AEO, and analytics features: you connect s33k as an MCP server and ask questions like "how is my site doing?" or "which pages does AI search land on?" and your LLM calls the right tool. Everything runs on a stack you host, so your data stays on your own machine or server.
+You run all of it by asking your LLM. There is no dashboard, period: the product is the MCP surface plus one single-use setup page. You connect s33k as an MCP server and ask questions like "how is my site doing?" or "which pages does AI search land on?" and your LLM calls the right tool. Everything runs on a stack you host, so your data stays on your own machine or server.
 
-s33k is a single-user, self-hosted project. It is meant for one person tracking their own site (or a handful of sites). There is no signup, no billing, and no multi-tenant accounts: you set one admin login in a config file and that is it.
+s33k is a single-user, self-hosted project. It is meant for one person tracking their own site (or a handful of sites). There is no signup, no billing, no multi-tenant accounts, and no web login: the single API key you generate at install time is the whole credential story.
 
 ## Credits
 
@@ -36,19 +36,39 @@ The product is the MCP control plane that joins all three. The per-page scoreboa
 
 ## What it looks like
 
-The web UI is a thin companion for setup and glancing; the MCP surface is the product. The screenshots below come from a demo instance with fictional data.
+There are no screenshots to show because there is no dashboard. s33k lives inside the chat you already use. A real session looks like this:
 
-**The keyword tracker.** Every keyword mapped to its target page, with live Google position, movement, and history:
+```text
+You: How is my site doing?
 
-![The s33k keyword tracker showing tracked keywords with live Google positions, movement arrows, history sparklines, search volume, and target pages](docs/screenshots/keywords.png)
+Assistant: I pulled the s33k briefing for example.com. The short version: a good week.
 
-**AI Traffic.** Which AI engines actually send you visitors, measured from real first-party referral data:
+  - Traffic: 412 visitors over the last 7 days, up 18% on the prior week. Top entry
+    page is /pricing (organic search).
+  - SEO: "project tracking tool" moved 11 -> 7. Two keywords sit in striking distance
+    (positions 11 and 12); a small content push on /features could put both on page one.
+  - AI search: ChatGPT and Perplexity sent 9 visitors, mostly landing on /docs/api.
 
-![The s33k AI Traffic view showing visitors from AI engines with a per-engine breakdown for ChatGPT, Perplexity, Claude, and Gemini, plus all referral sources](docs/screenshots/analytics.png)
+  Top action: /pricing gets your most organic entrances but has no tracked keyword.
+  Want me to add one?
+```
 
-**The per-page Scoreboard.** The join no other tool does: each page's traffic next to its tracked keyword and live rank, plus the gaps (pages with traffic but no tracked keyword, and keywords whose target pages get no traffic):
+And turning a pillar on is a conversation too:
 
-![The s33k Scoreboard joining per-page traffic to tracked keyword rank, with content-gap panels below](docs/screenshots/scoreboard.png)
+```text
+You: Enable SEO tracking.
+
+Assistant: SEO needs a Serper key (serper.dev, free tier available) so s33k can read
+  live Google rankings. A key should not be pasted into chat, so I minted a one-time
+  drop link on your instance. Run this in your own terminal, paste the key, press
+  Enter, then Ctrl-D:
+
+    curl -sS -X POST https://your-s33k-host/api/key-drop/eyJz... --data-binary @-
+
+  The key goes straight from your terminal to your s33k server: it never passes
+  through this chat. The link is signed, single-use, and expires in 15 minutes.
+  Tell me when it is done and I will kick off your first rank scrape.
+```
 
 ## What it costs to run
 
@@ -73,7 +93,7 @@ Everything is driven from your LLM over MCP. A few examples of the higher-level 
 
 ## MCP tools
 
-s33k exposes 72 MCP tools and 5 read-only knowledge resources, all sharing one authoritative registry at `mcp/src/tools.ts`. The main groups:
+s33k exposes 73 MCP tools and 5 read-only knowledge resources, all sharing one authoritative registry at `mcp/src/tools.ts`. The main groups:
 
 - **Cross-pillar (start here):** `start_here`, `briefing`, `insights`, `alerts`, `executive_summary`, `weekly_digest`, `page_scoreboard`, `entry_pages`, `entry_page_report`, `content_performance_report`, `conversion_attribution`, `portfolio_summary`.
 - **SEO:** `list_keywords`, `add_keyword`, `update_keyword`, `delete_keyword`, `refresh_keywords`, `striking_distance`, `seo_report`, `site_audit`, `cannibalization_detection`, `content_gap`, `competitor_visibility`, `discover_pages`, `get_insight` (Google Search Console).
@@ -96,11 +116,12 @@ You need Docker and Docker Compose. From a terminal:
 ```bash
 git clone https://github.com/benjaminard/s33k.git
 cd s33k
-./scripts/setup-env.sh        # writes .env with strong random secrets, prints your admin login and API key
+./scripts/setup-env.sh        # writes .env with strong random secrets, prints your API key
 docker compose up -d --build
+docker compose logs s33k | grep SETUP
 ```
 
-Open http://localhost:3000 and log in with the credentials the script printed. That is the whole install: the app and its Postgres come up together, the schema migrates on boot, and the beacon is ready to paste on your site. Save the API key the script printed, you will use it to connect your LLM below.
+The last command prints a one-time `[SETUP]` link. Open it once in a browser: optionally paste your [Serper](https://serper.dev) key (or skip that and do it later over MCP), copy the MCP connect command it shows you, and you are done with the browser forever. Everything after that is conversation with your own LLM. The app and its Postgres come up together, the schema migrates on boot, and the beacon is ready to paste on your site. Save the API key the script printed, you will use it to connect your LLM below.
 
 Prefer to set secrets yourself? Run `cp .env.example .env`, fill it in (`.env.example` documents every variable), then `docker compose up -d --build`.
 
@@ -108,7 +129,7 @@ Prefer to set secrets yourself? Run `cp .env.example .env`, fill it in (`.env.ex
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/benjaminard/s33k)
 
-Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you and prompting for a password. **One step after the first deploy:** Render gives your service a public URL like `https://s33k-abc.onrender.com`. Go to the service's environment settings and set `NEXT_PUBLIC_APP_URL` to that exact URL, then let it redeploy. Until you do, the app refuses to boot (on purpose, so links are never built from forgeable request headers). A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
+Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you. The one-time `[SETUP]` link prints in the service logs on first boot. **One step after the first deploy:** Render gives your service a public URL like `https://s33k-abc.onrender.com`. Go to the service's environment settings and set `NEXT_PUBLIC_APP_URL` to that exact URL, then let it redeploy. Until you do, the app refuses to boot (on purpose, so links are never built from forgeable request headers). A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
 
 ### Option B. Run from source (Node 20)
 
@@ -121,11 +142,11 @@ cp .env.example .env  # then edit it (see below)
 npm run dev
 ```
 
-Edit `.env` before starting: set `USER_NAME` and `PASSWORD` (your single admin login), generate `SECRET` with `openssl rand -hex 34` and `APIKEY` with `openssl rand -hex 24`, and add your own `SERPER_API_KEY` from [serper.dev](https://serper.dev) (or paste it in the web UI under Settings later). Leave `DATABASE_URL` unset to use a local SQLite file. s33k then runs at http://localhost:3000 and creates its schema on first start. `.env.example` documents every variable inline.
+Edit `.env` before starting: generate `SECRET` with `openssl rand -hex 34` and `APIKEY` with `openssl rand -hex 24`, and add your own `SERPER_API_KEY` from [serper.dev](https://serper.dev) (or paste it later on the one-time setup page, or hand it over via the key-drop flow from your LLM). Leave `DATABASE_URL` unset to use a local SQLite file. s33k then runs at http://localhost:3000, creates its schema on first start, and prints its one-time `[SETUP]` link to the console. `.env.example` documents every variable inline.
 
 ## Add your domain and paste the beacon
 
-Onboard your site in one step from your LLM ("Onboard example.com from scratch") once the MCP server is connected, or add the domain in the web UI. Either way, s33k gives you one tracking snippet. Paste that single `s33k.js` beacon tag on your site (in the `<head>`, or via your tag manager) and traffic, sources, clicks, form submits, scroll depth, and engagement start flowing in. The snippet is cookieless and captures no PII.
+Onboard your site in one step from your LLM ("Onboard example.com from scratch") once the MCP server is connected. s33k gives you one tracking snippet (the setup page shows it too). Paste that single `s33k.js` beacon tag on your site (in the `<head>`, or via your tag manager) and traffic, sources, clicks, form submits, scroll depth, and engagement start flowing in. The snippet is cookieless and captures no PII.
 
 ## Connect your LLM over MCP
 
@@ -246,7 +267,7 @@ To read Search Console data through the `get_insight` tool, set `GSC_OAUTH_CLIEN
 
 ## Rank-change email (optional)
 
-s33k can email you when tracked rankings move. Enable it in the app UI under Settings: set your SMTP server, port, username, password, and the notification From/To addresses there (they are stored encrypted in the database, not in env vars). Set the email cadence with the `NOTIFICATION_INTERVAL` env var (default `never`). Rank scrape cadence is set with `SCRAPE_INTERVAL`.
+s33k can email you when tracked rankings move. SMTP settings (server, port, username, password, and the notification From/To addresses) are stored encrypted in the database; write them with one authenticated call to `/api/settings` (a curl with your `APIKEY` Bearer header, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for the exact command). Set the email cadence with the `NOTIFICATION_INTERVAL` env var (default `never`). Rank scrape cadence is set with `SCRAPE_INTERVAL`.
 
 ## Hosting it on a server
 

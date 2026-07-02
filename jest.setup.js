@@ -1,55 +1,6 @@
 // eslint-disable-next-line no-unused-vars
 import 'isomorphic-fetch';
-import './styles/globals.css';
-import '@testing-library/jest-dom';
 import { enableFetchMocks } from 'jest-fetch-mock';
-// Optional: configure or set up a testing framework before each test.
-// If you delete this file, remove `setupFilesAfterEnv` from `jest.config.js`
-
-// Used for __tests__/testing-library.js
-// Learn more: https://github.com/testing-library/jest-dom
-
-window.matchMedia = (query) => ({
-   matches: false,
-   media: query,
-   onchange: null,
-   addListener: jest.fn(), // deprecated
-   removeListener: jest.fn(), // deprecated
-   addEventListener: jest.fn(),
-   removeEventListener: jest.fn(),
-   dispatchEvent: jest.fn(),
-});
-
-global.ResizeObserver = require('resize-observer-polyfill');
-
-// jsdom (Node 20) does not provide TextEncoder/TextDecoder globally, which MSW
-// (pulled in by __mocks__/utils.tsx) requires at import time. Polyfill from Node's util.
-if (typeof global.TextEncoder === 'undefined' || typeof global.TextDecoder === 'undefined') {
-   // eslint-disable-next-line global-require
-   const { TextEncoder, TextDecoder } = require('util');
-   global.TextEncoder = global.TextEncoder || TextEncoder;
-   global.TextDecoder = global.TextDecoder || TextDecoder;
-}
-
-// jsdom also lacks BroadcastChannel, which MSW references at import time. Node 20
-// provides it via worker_threads.
-if (typeof global.BroadcastChannel === 'undefined') {
-   // eslint-disable-next-line global-require
-   const { BroadcastChannel } = require('worker_threads');
-   global.BroadcastChannel = BroadcastChannel;
-}
-
-// jsdom does not expose the WHATWG stream globals that MSW's SSE/fetch interceptors
-// reference at import time. Node 20 provides them via stream/web.
-if (typeof global.ReadableStream === 'undefined'
-   || typeof global.WritableStream === 'undefined'
-   || typeof global.TransformStream === 'undefined') {
-   // eslint-disable-next-line global-require
-   const { ReadableStream, WritableStream, TransformStream } = require('stream/web');
-   global.ReadableStream = global.ReadableStream || ReadableStream;
-   global.WritableStream = global.WritableStream || WritableStream;
-   global.TransformStream = global.TransformStream || TransformStream;
-}
 
 // Default-mock DNS resolution. utils/site-crawl.ts now resolves each hostname and
 // rejects any that maps to a private IP (SSRF defense, security review #1). Unit tests

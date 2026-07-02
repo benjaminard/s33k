@@ -1,17 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
-import Cookies from 'cookies';
-import jwt from 'jsonwebtoken';
-import { allowedApiRoutes } from './allowedApiRoutes';
 
-// LEGACY AUTH HELPER. New multi-tenant routes should use utils/authorize.ts instead, because
-// authorize resolves the caller to an Account, applies member/share-key restrictions, and returns
-// the account object routes need for scopeWhere(owner). This helper remains for older settings /
-// migration / Google Ads paths that are effectively single-admin surfaces. If a route reads or
-// writes tenant-owned rows, migrate it to authorize() rather than extending this function.
+// LEGACY AUTH HELPER, now Bearer-only. The web UI (and with it the cookie/JWT login session) was
+// deleted in the headless phase, so the single credential this instance accepts is the APIKEY
+// Bearer key. New routes that read or write tenant-owned rows should use utils/authorize.ts, which
+// resolves the caller to the admin account and enforces the API-route whitelist; this helper
+// remains for the older settings / migration / Google Ads admin-maintenance surfaces.
 //
-// Keep this file dependency-free except for allowedApiRoutes. Pulling Sequelize models into this
-// helper would make every legacy route import the DB layer at module load and has broken Jest before.
+// Why there is no route-whitelist check here (unlike authorize): these admin surfaces were
+// previously cookie-only, and the whitelist existed to keep the Bearer key OUT of them while the
+// cookie session existed. With the cookie gone, the single APIKEY is the instance's only and
+// full-admin credential, so it reaches these routes directly. The whitelist stays the authorize()
+// seam for the data routes.
+//
+// Keep this file dependency-free. Pulling Sequelize models into this helper would make every
+// legacy route import the DB layer at module load and has broken Jest before.
 
 // Constant-time string equality. Returns false on a length mismatch (length is not secret for a
 // high-entropy key) and otherwise compares in constant time so the API-key check leaks no timing.
@@ -21,48 +24,24 @@ const timingSafeEqualStr = (a: string, b: string): boolean => {
 };
 
 /**
- * Psuedo Middleware: Verifies the user by their cookie value or their API Key
- * When accessing with API key only certain routes are accessible.
+ * Psuedo Middleware: Verifies the caller by the APIKEY Bearer key (the only credential).
  * @param {NextApiRequest} req - The Next Request
  * @param {NextApiResponse} res - The Next Response.
  * @returns {string}
  */
+// `res` is kept in the signature (unused since the cookie session was removed) so the many call
+// sites stay byte-identical: every route calls verifyUser(req, res).
+// eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
 const verifyUser = (req: NextApiRequest, res: NextApiResponse): string => {
-   const cookies = new Cookies(req, res);
-   const token = cookies && cookies.get('token');
-
    // Constant-time compare on the global APIKEY (audit area 4, low): a plain === short-circuits on
    // the first differing byte. timingSafeEqual needs equal-length buffers, so a length mismatch
    // returns false up front. The key is high-entropy, so this is hardening, not a live exploit fix.
    const presentedKey = req.headers.authorization ? req.headers.authorization.substring('Bearer '.length) : '';
    const verifiedAPI = !!process.env.APIKEY && timingSafeEqualStr(presentedKey, process.env.APIKEY);
-   const accessingAllowedRoute = req.url && req.method && allowedApiRoutes.includes(`${req.method}:${req.url.replace(/\?(.*)/, '')}`);
 
-   let authorized: string = '';
-   if (token && process.env.SECRET) {
-      // Pin the expected algorithm (audit area 3, low): prevents any future alg-confusion regression
-      // if an asymmetric verification key is ever introduced. The session JWT is HS256-signed.
-      jwt.verify(token, process.env.SECRET, { algorithms: ['HS256'] }, (err) => {
-         authorized = err ? 'Not authorized' : 'authorized';
-      });
-   } else if (verifiedAPI && accessingAllowedRoute) {
-      authorized = 'authorized';
-   } else {
-      if (!token) {
-         authorized = 'Not authorized';
-      }
-      if (token && !process.env.SECRET) {
-         authorized = 'Token has not been Setup.';
-      }
-      if (verifiedAPI && !accessingAllowedRoute) {
-         authorized = 'This Route cannot be accessed with API.';
-      }
-      if (req.headers.authorization && !verifiedAPI) {
-         authorized = 'Invalid API Key Provided.';
-      }
-   }
-
-   return authorized;
+   if (verifiedAPI) { return 'authorized'; }
+   if (req.headers.authorization) { return 'Invalid API Key Provided.'; }
+   return 'Not authorized';
 };
 
 export default verifyUser;

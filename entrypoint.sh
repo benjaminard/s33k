@@ -3,22 +3,20 @@
 # -----------------------------------------------------------------------------
 # Production safety: refuse to boot with the public SerpBear demo credentials.
 # These are the values shipped in the upstream demo and in this repo's example
-# files. Running a public instance with them means anyone can log in and call
-# the API. This check only fires when NODE_ENV=production, so local dev (which
+# files. Running a public instance with them means anyone can call the API as
+# you. This check only fires when NODE_ENV=production, so local dev (which
 # uses the demo defaults intentionally) is unchanged.
 # -----------------------------------------------------------------------------
 DEMO_APIKEY="5saedXklbslhnapihe2pihp3pih4fdnakhjwq5"
 DEMO_SECRET="4715aed3216f7b0a38e6b534a958362654e96d10fbc04700770d572af3dce43625dd"
-DEMO_PASSWORD="0123456789"
 
 # Audit area 3 (CRITICAL): also reject THIS repo's own .env.example placeholders, not just the
-# upstream SerpBear demo values. An operator who copies .env.example and only changes the obvious
-# "change me" password would otherwise boot with a publicly-known SECRET (forge sessions, decrypt
-# every stored credential) and APIKEY (full admin). Belt-and-suspenders: a positive length floor
-# rejects any future short/weak example value too (real values are hex-34 / hex-24).
+# upstream SerpBear demo values. An operator who copies .env.example and only changes one value
+# would otherwise boot with a publicly-known SECRET (decrypt every stored credential) and APIKEY
+# (full admin). Belt-and-suspenders: a positive length floor rejects any future short/weak
+# example value too (real values are hex-34 / hex-24).
 EXAMPLE_SECRET="replace-with-openssl-rand-hex-34"
 EXAMPLE_APIKEY="replace-with-openssl-rand-hex-24"
-EXAMPLE_PASSWORD="change-me-to-a-strong-password"
 MIN_SECRET_LEN=40
 MIN_APIKEY_LEN=32
 
@@ -34,14 +32,10 @@ if [ "$NODE_ENV" = "production" ]; then
     echo "[SECURITY] Refusing to start: SECRET is unset, a demo/placeholder value, or too short. Generate one: openssl rand -hex 34" >&2
     fail=1
   fi
-  if [ -z "$PASSWORD" ] || [ "$PASSWORD" = "$DEMO_PASSWORD" ] || [ "$PASSWORD" = "change-me-please" ] \
-     || [ "$PASSWORD" = "$EXAMPLE_PASSWORD" ]; then
-    echo "[SECURITY] Refusing to start: PASSWORD is unset or set to a demo/placeholder value. Set a strong admin password." >&2
-    fail=1
-  fi
   # Audit area 1 (host-header poisoning): NEXT_PUBLIC_APP_URL is the only header-INDEPENDENT source
-  # for the public base URL that gets baked into emailed invite/login/share links and the minted
-  # mcpConfig.S33K_BASE_URL (which carries a client's Bearer key). If it is unset in production, the
+  # for the public base URL that gets baked into user-facing links (the [SETUP] URL, key-drop
+  # commands, emailed report links) and the minted mcpConfig.S33K_BASE_URL (which carries a
+  # client's Bearer key). If it is unset in production, the
   # base URL would otherwise be derived from attacker-controllable Host / X-Forwarded-Host headers.
   # resolveBaseUrl() now fails closed at runtime, but refuse to boot here too so the misconfig is a
   # clear startup error, not a runtime 500 when the first link is minted. Same posture as the
@@ -51,7 +45,7 @@ if [ "$NODE_ENV" = "production" ]; then
     fail=1
   fi
   if [ "$fail" = "1" ]; then
-    echo "[SECURITY] Set strong APIKEY, SECRET, and PASSWORD env vars (see DEPLOY.md) and redeploy." >&2
+    echo "[SECURITY] Set strong APIKEY and SECRET env vars (see DEPLOY.md) and redeploy." >&2
     exit 1
   fi
 fi

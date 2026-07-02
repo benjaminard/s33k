@@ -1115,9 +1115,9 @@ const troubleshooting: TroubleshootingEntry[] = [
    {
       id: 'invalid_api_key',
       problem: 'A tool or request is rejected with "Invalid API Key Provided." or "Not authorized".',
-      resolution: 's33k is single-user: it accepts exactly one API key, the APIKEY you set in the environment (the MCP server '
-         + 'uses the same value). Check that the Authorization: Bearer <key> header matches your APIKEY exactly. Browser use '
-         + 'is authorized instead by the login session cookie from signing in at /login with USER_NAME / PASSWORD.',
+      resolution: 's33k is single-user and headless: it accepts exactly one credential, the APIKEY you set in the environment '
+         + '(the MCP server uses the same value). Check that the Authorization: Bearer <key> header matches your APIKEY '
+         + 'exactly. There is no login and no session cookie; the key is the whole auth story.',
    },
    {
       id: 'route_not_accessible',
@@ -1156,9 +1156,9 @@ const pricingAndLimits = {
    keywordTracking: 'Keyword tracking is bounded by per-domain and per-request caps (configurable; defaults 200 '
       + 'per domain and 50 per request, see utils/limits.ts) so a runaway scrape does not surprise you with Serper cost. '
       + 'Onboarding adds up to 20 discovered keywords per domain automatically. Raise the caps in utils/limits.ts if you want more.',
-   access: 's33k is single-user: one admin login (USER_NAME / PASSWORD) for the browser UI and one API key (the APIKEY, '
-      + 'which the MCP server also uses) for the REST API and MCP. Anyone with the URL and that key can act as you, so '
-      + 'protect them accordingly.',
+   access: 's33k is single-user and headless: one API key (the APIKEY, which the MCP server also uses) for the REST API '
+      + 'and MCP. There is no web login; the only browser surface is the one-time token-gated setup page. Anyone with the '
+      + 'URL and that key can act as you, so protect the key accordingly.',
    privacy: 'Tracking is cookieless and collects no PII: no cookies, no fingerprinting, the session id lives in '
       + 'sessionStorage and rotates daily, typed values are never read, and the server drops anything PII-shaped before '
       + 'storing it. s33k never trains on your data and never sends it to a model.',

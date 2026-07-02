@@ -22,12 +22,8 @@ services:
         generateValue: true
       - key: SECRET
         generateValue: true
-      - key: USER_NAME
-        value: admin
-      # Prompted from you during Blueprint creation.
-      - key: PASSWORD
-        sync: false
-      # Your own Serper key for rank tracking (or paste it in Settings after login).
+      # Your own Serper key for rank tracking (or paste it on the one-time setup
+      # page whose [SETUP] link is printed in the service logs on first boot).
       - key: SERPER_API_KEY
         sync: false
       # Which SERP source scrapes rankings; serper pairs with the key above.
