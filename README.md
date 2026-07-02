@@ -4,6 +4,8 @@
 
 # s33k
 
+[![verify](https://github.com/benjaminard/s33k/actions/workflows/verify.yml/badge.svg)](https://github.com/benjaminard/s33k/actions/workflows/verify.yml)
+
 s33k (reads "seek") is an open, self-hosted tool for one person to watch their own website, driven entirely from your own LLM over the Model Context Protocol (MCP). It joins the three things you check about a site into one place you control from Claude, Cursor, or any MCP client:
 
 - **SEO.** Where every page ranks in Google for the keywords you track.
@@ -16,7 +18,13 @@ s33k is a single-user, self-hosted project. It is meant for one person tracking 
 
 ## Credits
 
-s33k is a fork of [`towfiqi/serpbear`](https://github.com/towfiqi/serpbear) (MIT). It keeps SerpBear's Google rank-tracking core and adds the cookieless analytics beacon, the AI-referral (AEO) layer, the per-page scoreboard that ties traffic to rank, and the MCP control plane. Live Google rankings come from [Serper](https://serper.dev), a SERP API you bring your own key for. See [License](#license).
+s33k is a fork of [`towfiqi/serpbear`](https://github.com/towfiqi/serpbear) (MIT).
+
+- **From SerpBear:** the Google rank-tracking core (keywords, scheduled scrapes, the scraper integrations).
+- **Added in s33k:** the MCP control plane, the cookieless analytics beacon, the AI-referral (AEO) layer, and the per-page scoreboard that ties traffic to rank.
+- **Not in s33k:** multi-tenant accounts, signup, and billing. s33k is single-user on purpose.
+
+Live Google rankings come from [Serper](https://serper.dev), a SERP API you bring your own key for. See [License](#license).
 
 ## The three pillars
 
@@ -25,6 +33,15 @@ s33k is a fork of [`towfiqi/serpbear`](https://github.com/towfiqi/serpbear) (MIT
 3. **Analytics.** s33k ships its own cookieless, no-PII autocapture script. You paste one tag on your site and it records pageviews, first-touch source, clicks, form submits, scroll depth, and engagement time, with no per-element setup. All of it is stored in s33k's own database.
 
 The product is the MCP control plane that joins all three. The per-page scoreboard ties each page's traffic to its live Google rank, and flags content gaps (pages that get traffic but have no tracked keyword) and dead keywords (target pages getting no traffic).
+
+## What it costs to run
+
+s33k itself is free. The only per-use cost is the Serper key you bring for rank data, and it is small:
+
+- Serper gives new accounts **2,500 free queries with no credit card**, and the entry paid tier works out to about **$1 per 1,000 searches** after that (check [serper.dev](https://serper.dev) for current pricing).
+- One tracked keyword costs one query per scrape. At the default **weekly** cadence, 50 keywords is about 217 queries a month: the free credits alone last most of a year, and after that it rounds to pennies.
+- Even an aggressive setup (100 keywords scraped **daily**) is about 3,000 queries a month, roughly $3.
+- Analytics and AI-referral tracking cost nothing per event: the beacon writes to your own database, and hosting is whatever you already pay for the machine it runs on.
 
 ## What you can ask
 
@@ -75,7 +92,7 @@ Prefer to set secrets yourself? Run `cp .env.example .env`, fill it in (`.env.ex
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/benjaminard/s33k)
 
-Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you and prompting for a password. A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
+Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you and prompting for a password. **One step after the first deploy:** Render gives your service a public URL like `https://s33k-abc.onrender.com`. Go to the service's environment settings and set `NEXT_PUBLIC_APP_URL` to that exact URL, then let it redeploy. Until you do, the app refuses to boot (on purpose, so links are never built from forgeable request headers). A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
 
 ### Option B. Run from source (Node 20)
 
@@ -131,7 +148,7 @@ Restart the client, then try: "Give me the s33k briefing for example.com." Confi
 
 ### Cursor
 
-Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global). Local stdio:
+Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global). Replace `/absolute/path/to/s33k` with your real repo path (run `pwd` in the s33k directory to get it). Local stdio:
 
 ```json
 {
@@ -223,9 +240,13 @@ To run s33k somewhere your LLM and your team can reach it (a small VPS or server
 
 s33k is cookieless, captures no PII, never trains on your data, and makes no server-side LLM calls. The AI features (`briefing`, `insights`, `ai_visibility`, `alerts`, `entry_pages`) are rules-based: they compute structured findings from your own data and hand them to your own LLM to narrate. You can export everything s33k holds as a single JSON bundle (`export_data`) for backup, and because you self-host, deleting your data is a local action: drop your SQLite file or Postgres database. Every trust claim points at the code or test that proves it. See [`SECURITY.md`](SECURITY.md), or ask your own LLM via the `security_facts` MCP tool.
 
+## When something does not work
+
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) covers the failures people actually hit on a first run: keywords that never rank, MCP tools returning 401, a silent analytics beacon, and a container that refuses to boot. Once MCP is connected, your own LLM can also self-diagnose via the `help` tool and the `knowledge://troubleshooting` resource.
+
 ## Repo orientation for contributors
 
-[`CLAUDE.md`](CLAUDE.md) is the door-sign for anyone (human or AI) working in the repo: runtime and commands, the database seam (Postgres in prod, SQLite locally), the hard-won deploy gotchas, and the no-server-side-LLM invariant.
+[`CLAUDE.md`](CLAUDE.md) is the door-sign for anyone (human or AI) working in the repo: runtime and commands, the database seam (Postgres in prod, SQLite locally), the hard-won deploy gotchas, and the no-server-side-LLM invariant. [`ROADMAP.md`](ROADMAP.md) says where the product is headed and what it deliberately will not do.
 
 ## License
 
