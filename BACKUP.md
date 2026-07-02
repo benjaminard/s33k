@@ -141,7 +141,30 @@ this same database), backing up this one database preserves your traffic history
 
 ---
 
-## 5. Why `GET /api/export` is NOT a backup
+## 5. Retention: events are kept forever unless you prune them
+
+s33k never deletes analytics events. Every pageview, click, scroll, and vital the beacon records stays
+in `s33k_event` until you remove it. That is the right default for a self-hosted tool (your data, your
+disk, real year-over-year history), but it means the table grows without bound: a site doing 10,000
+pageviews a day adds a few million rows a year. Reads stay fast because every report queries a bounded
+recent window over indexed `(domain, created)` paths, but backups get bigger and a small database
+eventually feels it.
+
+If you want a retention policy, pick a horizon and prune on your own schedule (monthly is plenty).
+`created` is an ISO-8601 string, so a plain string comparison against a cutoff date is correct on both
+engines:
+
+```sql
+-- Postgres and SQLite: delete events older than (for example) two years.
+DELETE FROM s33k_event WHERE created < '2024-07-01T00:00:00';
+```
+
+Take a backup (sections 1 and 2) before the first prune you ever run. Rank history lives on the
+`keyword` rows, not in `s33k_event`, so pruning old events never touches your SEO history.
+
+---
+
+## 6. Why `GET /api/export` is NOT a backup
 
 `GET /api/export` returns your OWN data (your domains, keywords with rank history, first-party events,
 and account/key metadata) as one JSON bundle. It is a data-portability and trust feature ("you can take
