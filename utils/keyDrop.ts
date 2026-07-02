@@ -50,7 +50,9 @@ export const maxDropKeyLength = (secret: KeyDropSecret): number => (
  * search). Step 5 happens AFTER the drop, using the client_email the consume route confirms.
  */
 export const GSC_SERVICE_ACCOUNT_SETUP_STEPS = [
-   '1. Go to console.cloud.google.com and create a project (or select an existing one).',
+   '1. Go to console.cloud.google.com and create a project (or select an existing one). A project is '
+      + 'required: if you are prompted to pick an organization first, select it, then create a project '
+      + 'inside it. The project is just a container; any name works.',
    '2. Enable the "Google Search Console API" for that project (APIs and Services > Library).',
    '3. Create a service account (IAM and Admin > Service Accounts > Create). No roles are needed.',
    '4. Open the service account > Keys > Add Key > Create new key > JSON, and download the .json file.',
