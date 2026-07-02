@@ -34,6 +34,22 @@ Live Google rankings come from [Serper](https://serper.dev), a SERP API you brin
 
 The product is the MCP control plane that joins all three. The per-page scoreboard ties each page's traffic to its live Google rank, and flags content gaps (pages that get traffic but have no tracked keyword) and dead keywords (target pages getting no traffic).
 
+## What it looks like
+
+The web UI is a thin companion for setup and glancing; the MCP surface is the product. The screenshots below come from a demo instance with fictional data.
+
+**The keyword tracker.** Every keyword mapped to its target page, with live Google position, movement, and history:
+
+![The s33k keyword tracker showing tracked keywords with live Google positions, movement arrows, history sparklines, search volume, and target pages](docs/screenshots/keywords.png)
+
+**AI Traffic.** Which AI engines actually send you visitors, measured from real first-party referral data:
+
+![The s33k AI Traffic view showing visitors from AI engines with a per-engine breakdown for ChatGPT, Perplexity, Claude, and Gemini, plus all referral sources](docs/screenshots/analytics.png)
+
+**The per-page Scoreboard.** The join no other tool does: each page's traffic next to its tracked keyword and live rank, plus the gaps (pages with traffic but no tracked keyword, and keywords whose target pages get no traffic):
+
+![The s33k Scoreboard joining per-page traffic to tracked keyword rank, with content-gap panels below](docs/screenshots/scoreboard.png)
+
 ## What it costs to run
 
 s33k itself is free. The only per-use cost is the Serper key you bring for rank data, and it is small:
