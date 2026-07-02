@@ -1,8 +1,14 @@
 /* eslint-disable global-require, @typescript-eslint/no-var-requires */
 
 /**
- * Phase 3 scale test: the add-scale-indexes migration creates the missing hot-path indexes and is
- * idempotent (a re-run is a clean no-op), with table/column skip-safety on a fresh/partial DB.
+ * Scale test: the add-scale-indexes migration creates the missing hot-path s33k_event indexes and
+ * is idempotent (a re-run is a clean no-op), with table/column skip-safety on a fresh/partial DB.
+ *
+ * Single-user squash (2026-07): the migration originally also indexed account(stripe_customer_id)
+ * for the SaaS billing webhook. The dead-table entry was removed from the migration (the account
+ * table is no longer created by any migration), so this test now asserts BOTH that the two live
+ * s33k_event indexes land AND that the migration never touches an account table even when one
+ * exists (an existing install still has it).
  *
  * We drive the migration against an in-memory FAKE QueryInterface rather than a real Sequelize. The
  * real `sequelize` package transitively imports uuid's ESM build, which jest cannot transform here
@@ -45,7 +51,7 @@ const makeFakeQueryInterface = (tables: Record<string, Table>) => ({
    },
 });
 
-const EXPECTED = ['s33k_event_session', 's33k_event_domain_type_created', 'account_stripe_customer_id'];
+const EXPECTED = ['s33k_event_session', 's33k_event_domain_type_created'];
 
 const freshTables = (): Record<string, Table> => ({
    s33k_event: {
@@ -53,43 +59,52 @@ const freshTables = (): Record<string, Table> => ({
       // owner_id already indexed by an earlier migration; this migration must NOT touch it.
       indexes: new Set(['s33k_event_owner_id']),
    },
-   account: {
-      columns: new Set(['ID', 'stripe_customer_id']),
-      indexes: new Set(),
-   },
+});
+
+// An EXISTING install's leftover dead table (no migration creates it anymore, but installs that
+// predate the single-user squash still have it, possibly with the index a prior run added).
+const leftoverAccountTable = (): Table => ({
+   columns: new Set(['ID', 'stripe_customer_id']),
+   indexes: new Set(['account_stripe_customer_id']),
 });
 
 describe('1750147200030-add-scale-indexes', () => {
-   it('creates the three missing hot-path indexes', async () => {
+   it('creates the two missing hot-path s33k_event indexes', async () => {
       const tables = freshTables();
       await migration.up({ context: makeFakeQueryInterface(tables) });
       expect(tables.s33k_event.indexes.has('s33k_event_session')).toBe(true);
       expect(tables.s33k_event.indexes.has('s33k_event_domain_type_created')).toBe(true);
-      expect(tables.account.indexes.has('account_stripe_customer_id')).toBe(true);
       // The pre-existing owner_id index is untouched (no duplicate / no removal).
       expect(tables.s33k_event.indexes.has('s33k_event_owner_id')).toBe(true);
+   });
+
+   it('never touches a leftover account table on an existing install', async () => {
+      const tables = freshTables();
+      tables.account = leftoverAccountTable();
+      const qi = makeFakeQueryInterface(tables);
+      await migration.up({ context: qi });
+      // The dead table's index set is untouched: nothing added, nothing removed.
+      expect(Array.from(tables.account.indexes)).toEqual(['account_stripe_customer_id']);
+      await migration.down({ context: qi });
+      expect(Array.from(tables.account.indexes)).toEqual(['account_stripe_customer_id']);
    });
 
    it('is idempotent: a second up() adds no further indexes and does not throw', async () => {
       const tables = freshTables();
       const qi = makeFakeQueryInterface(tables);
       await migration.up({ context: qi });
-      const after1 = new Set([...tables.s33k_event.indexes, ...tables.account.indexes]);
+      const after1 = new Set([...tables.s33k_event.indexes]);
       // Re-run: the fake addIndex THROWS on a duplicate name, so a passing run PROVES the
       // idempotency guard skipped the already-present indexes rather than re-adding them.
       await expect(migration.up({ context: qi })).resolves.not.toThrow();
-      const after2 = new Set([...tables.s33k_event.indexes, ...tables.account.indexes]);
+      const after2 = new Set([...tables.s33k_event.indexes]);
       expect(Array.from(after2).sort()).toEqual(Array.from(after1).sort());
       EXPECTED.forEach((name) => expect(after2.has(name)).toBe(true));
    });
 
    it('skips cleanly when a target table does not exist (fresh/partial DB)', async () => {
-      const tables = freshTables();
-      delete tables.account;
+      const tables: Record<string, Table> = {};
       await expect(migration.up({ context: makeFakeQueryInterface(tables) })).resolves.not.toThrow();
-      // s33k_event indexes still created; the missing account table is simply skipped.
-      expect(tables.s33k_event.indexes.has('s33k_event_session')).toBe(true);
-      expect(tables.s33k_event.indexes.has('s33k_event_domain_type_created')).toBe(true);
    });
 
    it('skips an index whose target column is absent on the model', async () => {
@@ -108,7 +123,6 @@ describe('1750147200030-add-scale-indexes', () => {
       await migration.down({ context: qi });
       expect(tables.s33k_event.indexes.has('s33k_event_session')).toBe(false);
       expect(tables.s33k_event.indexes.has('s33k_event_domain_type_created')).toBe(false);
-      expect(tables.account.indexes.has('account_stripe_customer_id')).toBe(false);
       // The owner_id index this migration never created must survive down().
       expect(tables.s33k_event.indexes.has('s33k_event_owner_id')).toBe(true);
    });
