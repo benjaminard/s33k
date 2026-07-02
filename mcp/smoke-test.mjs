@@ -120,6 +120,7 @@ const EXPECTED_TOOLS = [
    'list_goals',
    'list_keywords',
    'live_view',
+   'mint_key_drop',
    'onboard',
    'page_engagement',
    'page_scoreboard',

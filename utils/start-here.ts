@@ -34,6 +34,12 @@ export type SetupSignals = {
    keywordCount: number,
    recentEvents: number,
    goalCount: number,
+   // MODULAR PILLARS: false when no SERP scraper key is configured, which means the SEO module is
+   // simply OFF (an optional module, not missing setup). The track_keywords step is then omitted
+   // from the checklist and first_report no longer requires keywords, so a keyless instance with
+   // flowing analytics reads as HEALTHY/complete. Optional and additive: callers that do not pass
+   // it keep the prior five-step behavior byte-for-byte (SEO assumed enabled).
+   seoEnabled?: boolean,
    // The domain, used only to phrase the "add your site" step. Optional: start_here always has one
    // by the time it computes setup, and setup_status passes its domain so the wording is unchanged.
    domain?: string,
@@ -65,6 +71,11 @@ export type SetupState = {
  */
 export const computeSetupState = (s: SetupSignals): SetupState => {
    const site = s.domain || 'your site';
+   // The SEO module defaults to enabled (legacy callers pass no flag). When it is OFF, tracking
+   // keywords is not a setup step (there is no scraper to check them), so the step is omitted and
+   // first_report stops requiring keywords: analytics-first is a designed-for path, not a degraded
+   // one, and a keyless instance must be able to reach 100% / complete.
+   const seoEnabled = s.seoEnabled !== false;
    const steps: SetupStep[] = [
       {
          key: 'add_domain',
@@ -73,7 +84,7 @@ export const computeSetupState = (s: SetupSignals): SetupState => {
          detail: s.owned ? `${site} is being tracked.` : `Add ${site} so s33k can track it.`,
          nextTool: 'onboard (or create_domain)',
       },
-      {
+      ...(seoEnabled ? [{
          key: 'track_keywords',
          title: 'Track keywords',
          done: s.keywordCount > 0,
@@ -90,7 +101,7 @@ export const computeSetupState = (s: SetupSignals): SetupState => {
             return `${s.keywordCount} keyword(s) tracked.`;
          })(),
          nextTool: 'add_keyword (or onboard auto-discovers up to 20)',
-      },
+      }] : []),
       {
          key: 'install_tracking',
          title: 'Install the tracking script',
@@ -110,7 +121,7 @@ export const computeSetupState = (s: SetupSignals): SetupState => {
       {
          key: 'first_report',
          title: 'See your first report',
-         done: s.owned && s.keywordCount > 0 && s.recentEvents > 0,
+         done: s.owned && (!seoEnabled || s.keywordCount > 0) && s.recentEvents > 0,
          detail: 'Get the proactive cross-pillar standup: what is happening and what to do next.',
          nextTool: 'briefing (and conversion_attribution once conversions accrue)',
       },
@@ -120,6 +131,70 @@ export const computeSetupState = (s: SetupSignals): SetupState => {
    const nextStep = steps.find((step) => !step.done) || null;
    return { steps, percentComplete, complete: nextStep === null, nextStep };
 };
+
+// --- MODULES: the instance's pillar surfaces, described as optional modules. --
+//
+// The headless direction reframes the three pillars as MODULES of one instance: Analytics and AI
+// referrals are always-on (they only wait for the beacon), SEO is optional and gated on a SERP
+// scraper key. The point of the framing: a keyless instance with flowing analytics is a HEALTHY
+// instance with one optional module off, never an incomplete setup. setup_status and start_here
+// both surface this block so an LLM can say "everything you enabled is live" instead of "setup is
+// missing something".
+
+/** One module's status line. `enable` is only present when the module is off and enable-able. */
+export type ModuleStatus = {
+   key: 'analytics' | 'ai_referrals' | 'seo',
+   name: string,
+   status: 'live' | 'waiting_for_beacon' | 'enabled' | 'not_enabled',
+   detail: string,
+   enable?: string,
+};
+
+/** The signals computeModules needs, already scoped/loaded by the route. */
+export type ModuleSignals = {
+   recentEvents: number,
+   seoEnabled: boolean,
+   keywordCount: number,
+};
+
+/**
+ * Describe the instance as modules. Pure. Analytics is live once beacon events flow; AI referrals
+ * ride analytics (same beacon, referrer-classified); SEO is enabled iff a scraper key is
+ * configured, otherwise "not enabled" WITH the conversational enablement path: the user asks
+ * their LLM to enable SEO, the LLM calls mint_key_drop, and the key never touches the chat.
+ * @param {ModuleSignals} m - The scoped module signals.
+ * @returns {ModuleStatus[]}
+ */
+export const computeModules = (m: ModuleSignals): ModuleStatus[] => [
+   {
+      key: 'analytics',
+      name: 'Analytics',
+      status: m.recentEvents > 0 ? 'live' : 'waiting_for_beacon',
+      detail: m.recentEvents > 0
+         ? 'Live: the s33k.js beacon is sending events (traffic, sources, human-vs-bot, conversions).'
+         : 'Waiting for the beacon: add the one-line s33k.js script to your site (install_instructions).',
+   },
+   {
+      key: 'ai_referrals',
+      name: 'AI referrals (AEO)',
+      status: m.recentEvents > 0 ? 'live' : 'waiting_for_beacon',
+      detail: m.recentEvents > 0
+         ? 'Live with analytics: visits referred by ChatGPT, Claude, Gemini, and Perplexity are classified automatically.'
+         : 'Comes alive with analytics: the same beacon classifies AI-engine referrals, no extra setup.',
+   },
+   {
+      key: 'seo',
+      name: 'SEO (Google rank tracking)',
+      status: m.seoEnabled ? 'enabled' : 'not_enabled',
+      detail: m.seoEnabled
+         ? `Enabled: a SERP scraper key is configured${m.keywordCount > 0 ? ` and ${m.keywordCount} keyword(s) are tracked` : ''}.`
+         : 'Not enabled (optional): no SERP scraper key is configured. Analytics and AI referrals work without it.',
+      ...(m.seoEnabled ? {} : {
+         enable: 'Ask me to enable SEO and I will mint a key-drop command (mint_key_drop): you run one curl line in '
+            + 'your own terminal and paste your Serper key there, so the key never passes through this chat.',
+      }),
+   },
+];
 
 // --- The curated "where to look next" pointers. ------------------------------
 //

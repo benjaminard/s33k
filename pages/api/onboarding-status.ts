@@ -4,7 +4,8 @@ import { ensureSynced } from '../../database/database';
 import authorize from '../../utils/authorize';
 import { scopeWhere } from '../../utils/scope';
 import resolveDomainAccess from '../../utils/domain-access';
-import { computeSetupState } from '../../utils/start-here';
+import { computeSetupState, computeModules, ModuleStatus } from '../../utils/start-here';
+import { isSeoConfigured } from '../../utils/setupState';
 import Domain from '../../database/models/domain';
 import Keyword from '../../database/models/keyword';
 import S33kEvent from '../../database/models/s33kEvent';
@@ -30,6 +31,7 @@ type Resp = {
    steps?: Step[],
    nextStep?: Step | null,
    firstRunHint?: FirstRunHint,
+   modules?: ModuleStatus[],
    message?: string,
    error?: string | null,
 };
@@ -64,12 +66,19 @@ const getStatus = async (req: NextApiRequest, res: NextApiResponse<Resp>, accoun
       // than imply done-with-no-results.
       const keywordsRankPending = keywordCount > 0 && keywordsPending >= keywordCount;
 
-      // The five setup steps + percentComplete + nextStep are computed by the SHARED
+      // MODULAR PILLARS: the SEO module is enabled iff a SERP scraper key is configured. When it
+      // is off, the checklist omits the keywords step (an off module is not missing setup), so a
+      // keyless analytics-first instance can reach complete. Fail OPEN to the legacy five-step
+      // shape on a settings-read error, never 500 the walkthrough.
+      const seoEnabled = await isSeoConfigured().catch(() => true);
+
+      // The setup steps + percentComplete + nextStep are computed by the SHARED
       // computeSetupState (utils/start-here.ts), the single source of truth, so setup_status and
       // start_here can never disagree about where a user is in setup.
       const { steps, percentComplete, nextStep } = computeSetupState({
-         owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain, keywordsRankPending,
+         owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain, keywordsRankPending, seoEnabled,
       });
+      const modules = computeModules({ recentEvents, seoEnabled, keywordCount });
 
       // Always point at the dashboard as the place to start. When setup is complete this is the
       // headline next move; when it is not, it is the closing hint so a brand-new user always
@@ -88,13 +97,17 @@ const getStatus = async (req: NextApiRequest, res: NextApiResponse<Resp>, accoun
             nextTool: 'dashboard',
          };
 
+      // When the SEO module is off, say so as an OPTIONAL module with its conversational
+      // enablement path, so the checklist never reads as "missing" what is simply not enabled.
+      const seoNote = seoEnabled ? ''
+         : ' The SEO module is off (optional): ask me to enable SEO and I will mint a key-drop command.';
       const message = nextStep
          ? `Setup is ${percentComplete}% done. Next: ${nextStep.title}. ${nextStep.detail} Use ${nextStep.nextTool}. `
-            + `When you are ready, ask "show me my dashboard" for the full overview of ${domain}.`
+            + `When you are ready, ask "show me my dashboard" for the full overview of ${domain}.${seoNote}`
          : `Setup is complete for ${domain}. Ask "show me my dashboard" for the full overview, `
-            + 'or "what should I do next?" any time.';
+            + `or "what should I do next?" any time.${seoNote}`;
 
-      return res.status(200).json({ domain, percentComplete, steps, nextStep, firstRunHint, message, error: null });
+      return res.status(200).json({ domain, percentComplete, steps, nextStep, firstRunHint, modules, message, error: null });
    } catch (error) {
       console.log('[ERROR] Building onboarding status for ', domain, error);
       return res.status(400).json({ error: 'Error Building Onboarding Status for this Domain.' });

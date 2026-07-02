@@ -1,6 +1,10 @@
 import { Sequelize } from 'sequelize-typescript';
 import sqlite3 from 'sqlite3';
 import pg from 'pg';
+// NOTE the import cycle (database -> setupState -> settingsStore -> database) is deliberate and
+// safe: every cross-module use is deferred to call time (no module-scope calls), which ESM live
+// bindings resolve correctly. announceSetupOnce is only INVOKED after the first successful sync.
+import { announceSetupOnce, registerSetupDomainCounter } from '../utils/setupState';
 import Domain from './models/domain';
 import Keyword from './models/keyword';
 import CrawlerHit from './models/crawlerHit';
@@ -56,12 +60,30 @@ const connection = process.env.DATABASE_URL
 let syncOnce: Promise<void> | null = null;
 export const ensureSynced = (): Promise<void> => {
    if (!syncOnce) {
+      // The usage half of the setup backfill rule needs a domain count. setupState cannot import
+      // the Domain model itself (a model import drags sequelize ESM into every jest suite touching
+      // that module, the CLAUDE.md section B regression class), so the counter is INJECTED from
+      // here. Registration MUST happen at call time, never module scope: this file sits inside the
+      // database -> setupState -> settingsStore -> database import cycle, and a module-scope call
+      // executes while setupState is still mid-initialization (a TDZ ReferenceError that killed
+      // next build at page-data collection for /setup). Inside ensureSynced, every module in the
+      // cycle finished initializing long ago.
+      registerSetupDomainCounter(() => Domain.count());
       syncOnce = connection.sync().then(() => undefined).catch((error) => {
          // Do not cache a failed sync: clear the memo so the next request retries rather than being
          // permanently wedged by one transient failure at boot (e.g. the DB not yet accepting calls).
          syncOnce = null;
          throw error;
       });
+      // FIRST-RUN SETUP BOOT HOOK. Next 12 (pages router, standalone output) has no app-level
+      // "runs once at server start" entry point (no instrumentation.ts; next.config.js is
+      // serialized, not executed, in standalone), so the earliest reliable once-per-process app
+      // code is the first ensureSynced caller, which every API route and the /setup page hit.
+      // Chained off the memoized promise (NOT awaited inside it, which would deadlock the sync
+      // resolution) so the "[SETUP] Open .../setup?token=..." line prints right after the schema
+      // is ready on the first request the process serves. announceSetupOnce self-guards: at most
+      // one line per process, only while setup is incomplete, never throws, no-op under jest.
+      syncOnce.then(() => announceSetupOnce()).catch(() => undefined);
    }
    return syncOnce;
 };

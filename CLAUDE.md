@@ -133,6 +133,37 @@ open-source repo, not an internal ops doc.
   `${NEXT_PUBLIC_APP_URL}/api/searchconsole/callback`. If they are unset, `/connect` returns a
   friendly "not configured" message, it does not crash. The whole feature is optional.
 
+### First-run setup + key drop: secrets never transit the LLM (headless direction, phase 1)
+- The headless direction: s33k is 100% MCP-driven; the hosted web UI is slated for deletion. Two
+  surfaces make that possible, and both obey one constraint: a SECRET (the Serper key) must never
+  pass through an LLM chat. Paths are browser-to-server or terminal-to-server only.
+- **/setup (the installer)** is the one browser moment. While setup is incomplete, the first
+  ensureSynced() success per process prints `[SETUP] Open <base>/setup?token=... to finish setup.`
+  (Next 12 pages-router standalone has NO app-level boot hook: no instrumentation.ts, and
+  next.config.js is serialized, not executed, in standalone output, so first-ensureSynced-caller is
+  the earliest once-per-process app code. The line therefore prints on the first request the
+  process serves, e.g. a healthcheck.) The token is >= 32 bytes, memory-only, regenerated each
+  boot, constant-time-compared, and dead forever once setup completes. GET /setup and POST
+  /api/setup are TOKEN-AUTHED PUBLIC routes (the GSC-callback pattern): NOT in allowedApiRoutes.
+- **BACKFILL RULE (do not regress):** an instance with meaningful stored settings (scraper key,
+  smtp, GSC/adwords creds, non-'none' scraper_type) or an env-configured scraper counts as setup
+  COMPLETED even without the `setup_completed` flag, so every pre-existing install (including the
+  production instance) never sees the setup page. See computeSetupCompleted in utils/setupState.ts.
+- **Key drop (enable SEO later, from a conversation):** the `mint_key_drop` tool returns a signed
+  (HMAC + 15 min TTL + single-use nonce, the searchConsoleOAuth state pattern) curl one-liner; the
+  user pastes the key on STDIN in their own terminal, so it never touches chat or shell history.
+  POST /api/key-drop/[nonce] is the signed-nonce public consume route (NOT in allowedApiRoutes;
+  body parser disabled because curl --data-binary defaults to an urlencoded Content-Type that
+  Next's parser would mangle). Consumed nonces persist in the settings blob (restart-durable).
+- **Cross-bundle singleton gotcha:** the pages-router server build can duplicate a shared module
+  per page/API bundle, so per-process state (the setup token, the key-drop replay guard) lives on
+  `globalThis`, never in module-local variables.
+- **Modular pillars:** SEO is an OPTIONAL module (enabled iff a scraper key + type resolve; see
+  computeSeoConfigured). With SEO off, computeSetupState omits the track_keywords step, so a
+  keyless instance with flowing analytics reads COMPLETE/healthy. setup_status and start_here
+  carry a `modules` block naming Analytics / AI referrals / SEO status and the mint_key_drop
+  enablement path.
+
 ### No server-side LLM, ever (a verified-true trust property)
 - The AI features (`briefing`, `insights`, `ai_visibility`, `alerts`, `entry_pages`) are
   RULES-BASED. They return structured data for the USER's own LLM to narrate. s33k has no

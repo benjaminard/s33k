@@ -39,6 +39,7 @@ export const allowedApiRoutes = [
    'GET:/api/causal-links',
    'GET:/api/suggest-goals',
    'GET:/api/onboarding-status',
+   'POST:/api/key-drop',
    'GET:/api/start-here',
    'GET:/api/striking-distance',
    'GET:/api/channel-report',
