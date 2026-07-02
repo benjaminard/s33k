@@ -28,7 +28,7 @@ Live Google rankings come from [Serper](https://serper.dev), a SERP API you brin
 
 ## The three pillars
 
-1. **SEO.** Track keywords per site, each mapped to its target page, and scrape live Google rankings. Serper is the rank data source: you get your own key at [serper.dev](https://serper.dev), paste it in, and results arrive in about two minutes.
+1. **SEO.** Track keywords per site, each mapped to its target page, and scrape live Google rankings. Serper is the rank data source: you get your own key at [serper.dev](https://serper.dev), paste it in, and results arrive in about two minutes. Optionally connect Google Search Console for Google's own query, impression, and click data (see [Connect Google Search Console](#connect-google-search-console-optional)).
 2. **AI-search referrals (AEO).** s33k detects which AI answer engines are sending you visitors by classifying your referral traffic. You see per-engine visitors and the AI share of referred traffic. No LLM is queried to do this: it reads only real first-party referral data.
 3. **Analytics.** s33k ships its own cookieless, no-PII autocapture script. You paste one tag on your site and it records pageviews, first-touch source, clicks, form submits, scroll depth, and engagement time, with no per-element setup. All of it is stored in s33k's own database.
 
@@ -263,7 +263,28 @@ Full per-tool details are in [`mcp/README.md`](mcp/README.md).
 
 ## Connect Google Search Console (optional)
 
-To read Search Console data through the `get_insight` tool, set `GSC_OAUTH_CLIENT_ID`, `GSC_OAUTH_CLIENT_SECRET`, and `NEXT_PUBLIC_APP_URL` in `.env`, then use the "Connect Google Search Console" flow. When those vars are unset, the connect step returns a friendly "not configured" message rather than failing, so this is purely optional.
+Search Console adds Google's own query, impression, and click data to the `get_insight` tool. It is optional: everything else works without it. Connecting it is a conversation, the same shape as turning on SEO:
+
+```text
+You: Connect Search Console.
+
+Assistant: I will walk you through it. In Google Cloud (console.cloud.google.com):
+  create or pick a project, enable the Search Console API, then under IAM & Admin
+  create a service account (no roles needed) and download a JSON key for it.
+
+  That JSON holds a private key, so it should not be pasted into chat. I minted a
+  one-time drop link. Run this in your own terminal, from the folder with the file:
+
+    curl -sS -X POST https://your-s33k-host/api/key-drop/eyJz... --data-binary @service-account.json
+
+  s33k will confirm the service account's email. Add that email as a user with Full
+  permission on your property at search.google.com/search-console, then tell me and
+  I will pull your Search Console data.
+```
+
+The credential goes straight from your terminal to your server and is stored encrypted; it never passes through the chat. The five Google steps also live inside s33k's own knowledge, so your LLM can guide the whole thing without you leaving the conversation.
+
+Prefer to configure it yourself? Two other paths work and need no drop link: set the service-account `SEARCH_CONSOLE_CLIENT_EMAIL` / `SEARCH_CONSOLE_PRIVATE_KEY` env vars, or set `GSC_OAUTH_CLIENT_ID` / `GSC_OAUTH_CLIENT_SECRET` / `NEXT_PUBLIC_APP_URL` and use the OAuth "Connect Google Search Console" consent flow. When none of these is configured, `get_insight` reports "not connected" rather than failing, so this is purely optional.
 
 ## Rank-change email (optional)
 
