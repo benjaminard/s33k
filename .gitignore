@@ -46,6 +46,7 @@ data/
 
 #copilot
 .github/*.md
+!.github/pull_request_template.md
 mcp/node_modules
 mcp/dist
 
