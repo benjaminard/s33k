@@ -1,7 +1,7 @@
 /**
  * s33k MCP tool + resource registrations (SHARED).
  *
- * This module is the single source of truth for the 72 tools and the knowledge resources the
+ * This module is the single source of truth for the 73 tools and the knowledge resources the
  * s33k MCP server exposes. It is consumed by TWO transports:
  *   1. mcp/src/index.ts        the stdio entry, bound to process.env.S33K_API_KEY (local install).
  *   2. pages/api/mcp/[[...slug]].ts   the hosted Streamable HTTP endpoint, bound PER REQUEST to the
@@ -15,7 +15,7 @@
  * The handler bodies below are byte-for-byte the originals from the stdio server; they reference a
  * local `s33kFetch` (aliased to fetchImpl), `jsonResult`, `errorResult`, and `z`, so the extraction
  * required no per-tool edits. The knowledge-coverage jest guard parses the tool-registration calls
- * out of THIS module (it now reads tools.ts), keeping the 72-tool count and the smoke EXPECTED_TOOLS
+ * out of THIS module (it now reads tools.ts), keeping the 73-tool count and the smoke EXPECTED_TOOLS
  * list in lockstep with what is registered here.
  */
 
@@ -87,7 +87,7 @@ export const KNOWLEDGE_RESOURCES: { uri: string; topic: string; name: string; de
 ];
 
 /**
- * Register all 72 s33k tools and the knowledge resources on the given MCP server, routing every
+ * Register all 73 s33k tools and the knowledge resources on the given MCP server, routing every
  * underlying API call through `fetchImpl`. Returns the number of tools registered (for banners).
  */
 export function registerS33kTools(server: McpServer, fetchImpl: FetchImpl): { tools: number; resources: number } {
@@ -115,8 +115,11 @@ server.registerTool(
          + 'reports each with a LIVE teaser of your own numbers and the tool to run it, whatYouCanSee (the data surfaces you '
          + 'now have), questionsYouCanAsk (concrete natural-language questions), the single top action, a curated nextSteps '
          + 'list (entry_pages for which pages AI search lands on, striking_distance for the quickest SEO wins, dashboard for '
-         + 'the full overview), and a ready-to-show rendered tour. Composes existing data (dashboard + setup + reports); never '
-         + 'queries an LLM; never fails, every mode is a usable next move.',
+         + 'the full overview), and a ready-to-show rendered tour. Every response also carries a MODULES block (Analytics: live '
+         + 'once beacon events flow; AI referrals: live with analytics; SEO: enabled only when a SERP scraper key is configured, '
+         + 'otherwise "not enabled" with the mint_key_drop enablement path). A keyless instance with flowing analytics is HEALTHY '
+         + 'with the SEO module off, not incomplete. Composes existing data (dashboard + setup + reports); never queries an LLM; '
+         + 'never fails, every mode is a usable next move.',
       inputSchema: {
          domain: z.string().optional().describe('The domain to start on, e.g. "example.com". Omit to pick from your tracked domains.'),
       },
@@ -1015,13 +1018,17 @@ server.registerTool(
 server.registerTool(
    'setup_status',
    {
-      title: 'Onboarding walkthrough: where you are and the next step',
+      title: 'Onboarding walkthrough: modules, where you are, and the next step',
       description:
-         'The guided-setup walkthrough. Reports where a domain is in setup (site added, keywords '
-         + 'tracked, tracking script live, conversion goals defined, first report ready) as a checklist '
-         + 'with percentComplete, and returns the single next step plus the exact tool to call. Use this '
-         + 'to walk a new user from zero to value step by step, and any time someone asks "what should I '
-         + 'set up next?" or "is my s33k configured?".',
+         'The guided-setup walkthrough. Describes the instance as MODULES (Analytics: live once beacon '
+         + 'events flow, otherwise waiting for the beacon; AI referrals: live with analytics; SEO: enabled '
+         + 'only when a SERP scraper key is configured, otherwise "not enabled" with the enablement path '
+         + 'via mint_key_drop) and reports where a domain is in setup as a checklist with percentComplete '
+         + 'plus the single next step and the exact tool to call. When the SEO module is off, tracking '
+         + 'keywords is NOT a setup step: an analytics-only instance with flowing events reads as healthy '
+         + 'and complete, with SEO simply an optional module that is off. Use this to walk a new user from '
+         + 'zero to value step by step, and any time someone asks "what should I set up next?", "is my '
+         + 's33k configured?", or "which modules are on?".',
       inputSchema: {
          domain: z.string().describe('The domain to check setup for, e.g. "example.com".'),
       },
@@ -1029,7 +1036,54 @@ server.registerTool(
    async ({ domain }) => {
       try {
          const data = await s33kFetch('/api/onboarding-status', { query: { domain } });
-         return jsonResult({ percentComplete: data.percentComplete, steps: data.steps, nextStep: data.nextStep, message: data.message, error: data.error });
+         return jsonResult({
+            percentComplete: data.percentComplete,
+            steps: data.steps,
+            nextStep: data.nextStep,
+            modules: data.modules,
+            message: data.message,
+            error: data.error,
+         });
+      } catch (err) {
+         return errorResult(err);
+      }
+   },
+);
+
+// ---------------------------------------------------------------------------
+// mint_key_drop  (enable a secret-gated module without the secret touching chat)
+// ---------------------------------------------------------------------------
+server.registerTool(
+   'mint_key_drop',
+   {
+      title: 'Mint a key-drop command (set a secret without pasting it into chat)',
+      description:
+         'Enable a secret-gated module (today: SEO via a Serper API key) WITHOUT the secret ever passing '
+         + 'through this conversation. Returns a single-use, signed drop link (expires in 15 minutes) and a '
+         + 'ready-to-run one-liner: `curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`. '
+         + 'Show the user the command and tell them: run it in your own terminal, paste the key, press '
+         + 'Enter, then Ctrl-D. The key goes terminal-to-server (stdin, so it never lands in shell history '
+         + 'or this chat) and is saved encrypted on the server. NEVER ask the user to paste the key into '
+         + 'the conversation; mint this command instead. After the user confirms they ran it, the SEO '
+         + 'module is enabled: verify with setup_status and start tracking keywords.',
+      inputSchema: {
+         secret: z
+            .enum(['serper'])
+            .default('serper')
+            .describe('Which secret the drop sets. "serper" (the default) enables the SEO module.'),
+      },
+   },
+   async ({ secret }) => {
+      try {
+         const data = await s33kFetch('/api/key-drop', { method: 'POST', body: { secret } });
+         return jsonResult({
+            secret: data.secret,
+            command: data.command,
+            url: data.url,
+            expiresInMinutes: data.expiresInMinutes,
+            instructions: data.instructions,
+            error: data.error,
+         });
       } catch (err) {
          return errorResult(err);
       }
@@ -2849,6 +2903,6 @@ for (const resource of KNOWLEDGE_RESOURCES) {
    );
 }
 
-   // Single-user: a flat 72 tools, no admin gate, no billing tools.
-   return { tools: 72, resources: KNOWLEDGE_RESOURCES.length };
+   // Single-user: a flat 73 tools, no admin gate, no billing tools.
+   return { tools: 73, resources: KNOWLEDGE_RESOURCES.length };
 }

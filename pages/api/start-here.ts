@@ -50,16 +50,17 @@ import { selectSuggestedQuestions } from '../../utils/suggested-questions';
 import { getInstallGuides } from '../../utils/install-guides';
 import { findStrikingDistance, StrikingInput } from '../../utils/striking-distance';
 import {
-   computeSetupState, buildOnboarding, buildReady, InstallPayload, ReportTeasers,
+   computeSetupState, computeModules, buildOnboarding, buildReady, InstallPayload, ReportTeasers,
    analyticsTeaser, seoTeaser, aeoTeaser, TEASER_UNAVAILABLE,
-   OnboardingResult, ReadyResult,
+   OnboardingResult, ReadyResult, ModuleStatus,
 } from '../../utils/start-here';
+import { isSeoConfigured } from '../../utils/setupState';
 
 type StartHereResponse =
    | { mode: 'no-domain', message: string, error?: string | null }
    | { mode: 'pick-domain', domains: string[], message: string, error?: string | null }
-   | (OnboardingResult & { error?: string | null })
-   | (ReadyResult & { error?: string | null })
+   | (OnboardingResult & { modules?: ModuleStatus[], error?: string | null })
+   | (ReadyResult & { modules?: ModuleStatus[], error?: string | null })
    | { error: string | null };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<StartHereResponse>) {
@@ -117,9 +118,17 @@ const getStartHere = async (req: NextApiRequest, res: NextApiResponse<StartHereR
          owned ? Goal.count({ where: { domain, ...scope } }).catch(() => 0) : Promise.resolve(0),
       ]);
 
+      // MODULAR PILLARS: SEO is an optional module, enabled iff a SERP scraper key is configured.
+      // With SEO off, computeSetupState omits the keywords step, so a keyless instance with
+      // flowing analytics is COMPLETE (healthy with one module off), and ready mode below labels
+      // the SEO report "not enabled" with the mint_key_drop enablement path instead of "0
+      // keywords". Fail OPEN to the legacy shape on a settings-read error.
+      const seoEnabled = await isSeoConfigured().catch(() => true);
+
       const setup = computeSetupState({
-         owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain,
+         owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain, seoEnabled,
       });
+      const modules = computeModules({ recentEvents, seoEnabled, keywordCount });
 
       // Incomplete setup (including a not-owned/not-added domain): walk the user through INSTALL and
       // preview what each report UNLOCKS, then STOP. Dumping analytics on a half-set-up site is the
@@ -153,7 +162,7 @@ const getStartHere = async (req: NextApiRequest, res: NextApiResponse<StartHereR
                   + 'later start_here (or install_instructions) will show it with your domain.',
             };
          const onboarding = buildOnboarding(domain, setup, install);
-         return res.status(200).json({ ...onboarding, error: null });
+         return res.status(200).json({ ...onboarding, modules, error: null });
       }
 
       // ---- Step 3 + 4: ready. Compose the dashboard for the headline + top action. ----
@@ -255,8 +264,15 @@ const getStartHere = async (req: NextApiRequest, res: NextApiResponse<StartHereR
                topSourceVisitors: top ? top.visitors : 0,
             });
          })(),
-         // SEO teaser: tracked count + on-page-one + striking-distance count, reusing the shared util.
+         // SEO teaser: tracked count + on-page-one + striking-distance count, reusing the shared
+         // util. When the SEO module is OFF, the teaser is the enablement path instead: "0
+         // keywords tracked" would read as a failure, but a keyless instance is the designed-for
+         // analytics-first path with one optional module off.
          (async () => {
+            if (!seoEnabled) {
+               return 'SEO module not enabled (optional). Ask me to enable SEO and I will mint a key-drop command '
+                  + '(mint_key_drop); your Serper key never passes through this chat.';
+            }
             const onPageOne = keywords.filter((k) => {
                const pos = Number(k.position) || 0;
                return pos > 0 && pos <= 10;
@@ -312,7 +328,7 @@ const getStartHere = async (req: NextApiRequest, res: NextApiResponse<StartHereR
          rankPending: anyRankPending,
          goalCount,
       });
-      return res.status(200).json({ ...ready, error: null });
+      return res.status(200).json({ ...ready, modules, error: null });
    } catch (error) {
       // Last-resort guard. The per-pillar catches mean we should never get here; if we do, still
       // return a usable ready payload (curated reports/see/ask, teasers degraded) rather than a 500,

@@ -11,7 +11,7 @@ There are two ways to connect, and they expose the EXACT same tools (the registr
 
 ## Tools
 
-The server registers 72 tools and 5 knowledge resources, grouped by pillar. s33k is single-user: there is one flat tool surface and one API key, no per-tool access tiers. The authoritative source is `src/tools.ts` (the shared `registerS33kTools`, used by both transports); the per-tool descriptions live in `utils/knowledge.ts` in the root repo. Most read tools take `domain` and an optional `period` (e.g. `30d`); the per-tool specifics are below.
+The server registers 73 tools and 5 knowledge resources, grouped by pillar. s33k is single-user: there is one flat tool surface and one API key, no per-tool access tiers. The authoritative source is `src/tools.ts` (the shared `registerS33kTools`, used by both transports); the per-tool descriptions live in `utils/knowledge.ts` in the root repo. Most read tools take `domain` and an optional `period` (e.g. `30d`); the per-tool specifics are below.
 
 ### Getting started
 
@@ -238,7 +238,7 @@ The stdio server waits for a client, so running it by hand will print a startup 
 S33K_API_KEY=... S33K_BASE_URL=http://localhost:3000 node dist/index.js
 ```
 
-A clean boot prints `s33k-mcp connected (base URL: ...). 72 tools and 5 resources registered.` to stderr. Press Ctrl-C to stop.
+A clean boot prints `s33k-mcp connected (base URL: ...). 73 tools and 5 resources registered.` to stderr. Press Ctrl-C to stop.
 
 ## End-to-end smoke test
 

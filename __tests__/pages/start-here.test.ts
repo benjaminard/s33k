@@ -26,6 +26,9 @@ jest.mock('../../utils/analytics', () => ({
    __esModule: true,
    getAnalyticsProvider: jest.fn(),
 }));
+// setupState pulls the settings store (sequelize models) in; mock the one read the route makes.
+// Default: SEO enabled (a scraper key configured), the legacy shape every existing case assumes.
+jest.mock('../../utils/setupState', () => ({ __esModule: true, isSeoConfigured: jest.fn(async () => true) }));
 
 // eslint-disable-next-line import/first
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -43,6 +46,8 @@ import GoalModel from '../../database/models/goal';
 import authorizeFn from '../../utils/authorize';
 // eslint-disable-next-line import/first
 import { getAnalyticsProvider } from '../../utils/analytics';
+// eslint-disable-next-line import/first
+import { isSeoConfigured } from '../../utils/setupState';
 
 const mockDomain = DomainModel as unknown as { findOne: jest.Mock, findAll: jest.Mock };
 const mockKeyword = KeywordModel as unknown as { findAll: jest.Mock, count: jest.Mock };
@@ -50,6 +55,7 @@ const mockEvent = S33kEventModel as unknown as { findAll: jest.Mock, count: jest
 const mockGoal = GoalModel as unknown as { findAll: jest.Mock, count: jest.Mock };
 const mockAuthorize = authorizeFn as unknown as jest.Mock;
 const mockProvider = getAnalyticsProvider as unknown as jest.Mock;
+const mockSeoConfigured = isSeoConfigured as unknown as jest.Mock;
 
 const row = (data: Record<string, unknown>) => ({ get: () => data, ...data });
 const pv = (session: string, page: string, source: string, is_bot: boolean, created: string) =>
@@ -93,6 +99,7 @@ beforeEach(() => {
    mockEvent.findAll.mockResolvedValue([]);
    mockGoal.findAll.mockResolvedValue([]);
    mockProvider.mockReturnValue(providerStub());
+   mockSeoConfigured.mockResolvedValue(true);
 });
 
 describe('GET /api/start-here', () => {
@@ -331,5 +338,73 @@ describe('GET /api/start-here', () => {
       const res = makeRes();
       await handler(makeReq({ domain: 'getmasset.com' }), res);
       expect(res.statusCode).toBe(401);
+   });
+});
+
+describe('GET /api/start-here with the SEO module OFF (modular pillars)', () => {
+   it('a KEYLESS instance with flowing analytics is READY (healthy), with SEO shown as an optional off module', async () => {
+      mockSeoConfigured.mockResolvedValue(false);
+      // No keywords (SEO off), but analytics flowing and a goal defined.
+      mockKeyword.count.mockResolvedValue(0);
+      mockEvent.count.mockResolvedValue(50);
+      mockGoal.count.mockResolvedValue(1);
+      mockEvent.findAll
+         .mockResolvedValueOnce([pv('A', '/', 'direct', false, '2026-06-10T10:00:00.000Z')])
+         .mockResolvedValueOnce([]);
+      mockGoal.findAll.mockResolvedValue([
+         row({ ID: 7, name: 'Demo Booked', kind: 'page_reached', match_value: '/pricing', match_page: null, match_mode: 'prefix', value: 500 }),
+      ]);
+      mockProvider.mockReturnValue(providerStub({
+         summary: { pageviews: 90, visitors: 40, bounceRate: 40, avgDuration: 30, pagesPerVisit: 1.5, error: null },
+      }));
+
+      const res = makeRes();
+      await handler(makeReq({ domain: 'getmasset.com' }), res);
+
+      // HEALTHY, not incomplete: ready mode despite zero keywords, because SEO is just off.
+      expect(res.statusCode).toBe(200);
+      expect(res.payload.mode).toBe('ready');
+
+      // The modules block names the state: analytics/AI live, SEO not enabled with the enable path.
+      const byKey: Record<string, any> = {};
+      res.payload.modules.forEach((m: any) => { byKey[m.key] = m; });
+      expect(byKey.analytics.status).toBe('live');
+      expect(byKey.ai_referrals.status).toBe('live');
+      expect(byKey.seo.status).toBe('not_enabled');
+      expect(byKey.seo.enable).toContain('mint_key_drop');
+
+      // The SEO report teaser is the enablement path, never a failure-reading "0 keywords".
+      const seoReport = res.payload.reports.find((r: any) => r.key === 'seo');
+      expect(seoReport.teaser).toContain('mint_key_drop');
+      expect(seoReport.teaser).not.toContain('No keywords tracked');
+   });
+
+   it('a KEYED instance keeps the legacy shape and reports the SEO module enabled', async () => {
+      mockKeyword.count.mockResolvedValue(2);
+      mockEvent.count.mockResolvedValue(10);
+      mockGoal.count.mockResolvedValue(1);
+      mockKeyword.findAll.mockResolvedValue([
+         kw('dam mcp', 14, '["https://getmasset.com/mcp"]', '/mcp', JSON.stringify({ '2026-06-01': 14 })),
+      ]);
+      mockEvent.findAll
+         .mockResolvedValueOnce([pv('A', '/', 'direct', false, '2026-06-10T10:00:00.000Z')])
+         .mockResolvedValueOnce([]);
+      const res = makeRes();
+      await handler(makeReq({ domain: 'getmasset.com' }), res);
+      expect(res.payload.mode).toBe('ready');
+      expect(res.payload.modules.find((m: any) => m.key === 'seo').status).toBe('enabled');
+   });
+
+   it('a truly unconfigured keyless instance still gets the onboarding walkthrough (no domain added)', async () => {
+      mockSeoConfigured.mockResolvedValue(false);
+      mockDomain.findOne.mockResolvedValue(null);
+      const res = makeRes();
+      await handler(makeReq({ domain: 'brandnew.com' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(res.payload.mode).toBe('setup');
+      expect(res.payload.nextStep).toBe('Add your site');
+      // With SEO off, the checklist has four steps (track_keywords omitted), not a fifth undone one.
+      expect(res.payload.checklist.map((c: any) => c.key)).not.toContain('track_keywords');
+      expect(res.payload.modules.find((m: any) => m.key === 'seo').status).toBe('not_enabled');
    });
 });

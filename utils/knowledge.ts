@@ -115,8 +115,11 @@ const capabilities: CapabilityEntry[] = [
          + 'prebuilt reports (Analytics, SEO, AI-search) each with a LIVE teaser of your own numbers and the tool to run it, '
          + 'whatYouCanSee (the data surfaces you now have), questionsYouCanAsk (concrete questions you can say), the single top '
          + 'action, a curated nextSteps list that always surfaces entry_pages (which pages AI search lands on), striking_distance '
-         + '(the quickest SEO wins), and dashboard, plus a ready-to-show rendered tour. Composes existing data; never queries an LLM; '
-         + 'never fails.',
+         + '(the quickest SEO wins), and dashboard, plus a ready-to-show rendered tour. Every response also carries a MODULES '
+         + 'block: Analytics live once beacon events flow, AI referrals live with analytics, SEO enabled only when a scraper key '
+         + 'is configured (otherwise "not enabled" with the mint_key_drop enablement path). A keyless instance with flowing '
+         + 'analytics is healthy with the SEO module off, not incomplete. Composes existing data; never queries an LLM; never '
+         + 'fails.',
       whenToUse: 'Use as the very first call when someone connects s33k, does not know where to start, or asks "what should I do?", '
          + '"where do I begin?", "how do I install s33k?", or "give me the most important thing". Prefer it over dashboard for a cold '
          + 'start: it checks setup first, walks install if needed, then shows the 3 reports with your numbers and what to ask.',
@@ -442,14 +445,31 @@ const capabilities: CapabilityEntry[] = [
       id: 'setup_status',
       toolName: 'setup_status',
       category: 'onboarding',
-      title: 'Onboarding walkthrough: where you are and the next step',
-      description: 'Reports a domain\'s setup progress as a checklist (site added, keywords tracked, tracking script live, conversion goals '
-         + 'defined, first report ready) with percentComplete, and returns the single next step plus the exact tool to call. It also returns a '
-         + 'firstRunHint that points at the dashboard as the place to start: even before setup is finished it tells a brand-new user they can ask '
-         + '"show me my dashboard" for the full overview, and once setup is complete the dashboard is the headline next move.',
-      whenToUse: 'Use to walk a new user from zero to value step by step, or whenever someone asks what to set up next or whether s33k is '
-         + 'configured for their site. When they are set up (or just want the big picture), point them at the dashboard tool for the full overview.',
+      title: 'Onboarding walkthrough: modules, where you are, and the next step',
+      description: 'Describes the instance as MODULES and reports a domain\'s setup progress as a checklist with percentComplete plus the single '
+         + 'next step and the exact tool to call. The modules block: Analytics is live once beacon events flow (otherwise waiting for the beacon); '
+         + 'AI referrals are live with analytics (same beacon, no extra setup); SEO is enabled only when a SERP scraper key is configured, '
+         + 'otherwise it reads "not enabled" with the enablement path (ask the LLM to enable SEO, which mints a key-drop command via '
+         + 'mint_key_drop). With SEO off, tracking keywords is not a setup step, so an analytics-only instance with flowing events reads healthy '
+         + 'and complete. It also returns a firstRunHint pointing at the dashboard as the place to start.',
+      whenToUse: 'Use to walk a new user from zero to value step by step, whenever someone asks what to set up next, whether s33k is configured, '
+         + 'or which modules are on. When they are set up (or just want the big picture), point them at the dashboard tool for the full overview.',
       examplePrompt: 'Walk me through setting up s33k for example.com, then show me my dashboard.',
+   },
+   {
+      id: 'mint_key_drop',
+      toolName: 'mint_key_drop',
+      category: 'onboarding',
+      title: 'Mint a key-drop command (set a secret without pasting it into chat)',
+      description: 'Enables a secret-gated module (today: SEO via a Serper API key) without the secret ever passing through the conversation. '
+         + 'Returns a single-use, HMAC-signed drop link that expires in 15 minutes, plus a ready-to-run one-liner: '
+         + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`. The user runs it in their own terminal, pastes the key on '
+         + 'stdin, and presses Ctrl-D, so the key never lands in shell history, the chat transcript, or the LLM\'s context. The server saves it '
+         + 'encrypted into the settings row and the confirmation never echoes the key.',
+      whenToUse: 'Use whenever the user wants to enable SEO (or set any supported secret) and the instance has no scraper key configured, and '
+         + 'ALWAYS instead of asking the user to paste an API key into the chat. After they confirm running the command, verify with '
+         + 'setup_status and start tracking keywords.',
+      examplePrompt: 'Enable SEO for my s33k instance. I have a Serper key ready.',
    },
    {
       id: 'striking_distance',
