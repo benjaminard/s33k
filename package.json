@@ -52,7 +52,6 @@
     "sequelize": "^6.37.7",
     "sequelize-typescript": "^2.1.6",
     "sqlite3": "^5.1.7",
-    "stripe": "^17.7.0",
     "umzug": "^3.8.2",
     "zod": "^3.25.0"
   },

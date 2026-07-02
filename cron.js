@@ -101,27 +101,6 @@ const runAppCronJobs = () => {
       });
    }, { scheduled: true });
 
-   // Run the lifecycle DUNNING CRON (daily). POSTs /api/cron?mode=dunning, which mails the
-   // "your trial ends soon" notice to trialing accounts inside the dunning window. The server decides
-   // server-side (MULTI_TENANT + admin caller + a trialing-accounts query) whether to mail anything,
-   // so this only fires the timed trigger. Default daily; override cadence with DUNNING_INTERVAL.
-   const dunningInterval = process.env.DUNNING_INTERVAL || 'daily';
-   if (dunningInterval !== 'never') {
-      const dunningCronTime = generateCronTime(dunningInterval === 'daily' ? 'daily_morning' : dunningInterval);
-      if (dunningCronTime) {
-         new Cron(dunningCronTime, () => {
-            const fetchOpts = { method: 'POST', headers: { Authorization: `Bearer ${process.env.APIKEY}` } };
-            fetch(`${INTERNAL_BASE_URL}/api/cron?mode=dunning`, fetchOpts)
-            .then((res) => res.json())
-            .then((data) => console.log(data))
-            .catch((err) => {
-               console.log('ERROR Making dunning Cron Request..');
-               console.log(err);
-            });
-         }, { scheduled: true });
-      }
-   }
-
    // Run Google Search Console Scraper Daily (gated on the service-account env vars, unchanged).
    if (process.env.SEARCH_CONSOLE_PRIVATE_KEY && process.env.SEARCH_CONSOLE_CLIENT_EMAIL) {
       const searchConsoleCRONTime = generateCronTime('daily');

@@ -99,3 +99,19 @@ describe('POST /api/cron?mode=retry', () => {
       expect(mockRefresh).not.toHaveBeenCalled();
    });
 });
+
+describe('POST /api/cron with an unknown mode', () => {
+   // Regression guard: a leftover mode=dunning cron used to fall through to the FULL scrape,
+   // silently spending SERP credits daily. Unknown modes must be rejected, never scrape.
+   it('rejects unknown modes with 400 and never touches keywords', async () => {
+      mockAuthorize.mockResolvedValue({ authorized: true, account: { ID: ADMIN_ACCOUNT_ID }, role: 'admin' });
+
+      const res = makeRes();
+      await cronHandler(makeReq({ mode: 'dunning' }), res);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.payload).toEqual(expect.objectContaining({ started: false }));
+      expect(mockKeyword.findAll).not.toHaveBeenCalled();
+      expect(mockRefresh).not.toHaveBeenCalled();
+   });
+});
