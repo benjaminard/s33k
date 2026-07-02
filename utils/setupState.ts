@@ -27,6 +27,10 @@ type SetupRuntimeState = {
    tokenConsumed: boolean,
    /** True once the boot log line has been printed for this process. */
    announced: boolean,
+   /** Injected by database.ts: counts tracked domains. Injection (not an import) on purpose: a
+    *  static model import here would drag sequelize ESM into every jest suite that touches this
+    *  module, the exact regression class CLAUDE.md section B documents for allowedApiRoutes. */
+   domainCounter: (() => Promise<number>) | null,
 };
 
 const stateKey = '__s33kSetupState';
@@ -34,9 +38,21 @@ const globalStore = globalThis as unknown as { [stateKey]?: SetupRuntimeState };
 
 const getState = (): SetupRuntimeState => {
    if (!globalStore[stateKey]) {
-      globalStore[stateKey] = { token: null, tokenConsumed: false, announced: false };
+      globalStore[stateKey] = {
+         token: null, tokenConsumed: false, announced: false, domainCounter: null,
+      };
    }
    return globalStore[stateKey] as SetupRuntimeState;
+};
+
+/**
+ * Register the domain-count probe used by the usage half of the setup backfill rule. Called once
+ * at module init by database/database.ts (which imports both this module and the Domain model);
+ * injected rather than imported here to keep this module free of sequelize model dependencies.
+ * @param {() => Promise<number>} counter - Resolves to the number of tracked domains.
+ */
+export const registerSetupDomainCounter = (counter: () => Promise<number>): void => {
+   getState().domainCounter = counter;
 };
 
 /** Test-only: reset the per-process setup runtime state (token, consumed flag, announce guard). */
@@ -130,6 +146,18 @@ export const isSetupCompleted = async (): Promise<boolean> => {
    // Env-configured scraper = an already-provisioned install (the settings row may be empty).
    if ((process.env.SERPER_API_KEY || process.env.SCAPING_API || '').trim() !== '') { return true; }
    if ((process.env.SCRAPER_TYPE || '').trim() !== '' && process.env.SCRAPER_TYPE !== 'none') { return true; }
+   // Usage backfill: an install with ANY tracked domain is in use (the analytics-only case has no
+   // credential in settings at all), so it must never resurface the installer after an upgrade.
+   // Fail toward "not completed" on a read error: the routes are still token-gated and completing
+   // setup is non-destructive, so the failure mode is a spurious log line, never data loss.
+   const { domainCounter } = getState();
+   if (domainCounter) {
+      try {
+         if ((await domainCounter()) > 0) { return true; }
+      } catch (error) {
+         // fall through to the settings-based answer
+      }
+   }
    return false;
 };
 
