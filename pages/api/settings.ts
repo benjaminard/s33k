@@ -20,6 +20,28 @@ type SettingsGetResponse = {
    error?: string,
 }
 
+// The credential fields this route must never return in plaintext. getAppSettings() stays fully
+// decrypted for INTERNAL callers (scrapes, notifications, GSC/adwords reads import it directly),
+// but the HTTP surface only ever says whether a secret is set. With the web UI deleted there is
+// no legitimate reader of a secret's value over HTTP: you only ever need to know it is set, and
+// the modular pillar status already tells you that.
+const SECRET_FIELDS = [
+   'scaping_api',
+   'smtp_password',
+   'search_console_client_email',
+   'search_console_private_key',
+   'adwords_client_id',
+   'adwords_client_secret',
+   'adwords_developer_token',
+   'adwords_account_id',
+] as const;
+
+// The sentinel a set-but-hidden secret is masked to on GET. updateSettings treats an incoming
+// value equal to this sentinel as "keep the stored secret", so a GET, modify, PUT round-trip can
+// never overwrite a real key with the mask itself. An empty string still explicitly CLEARS a
+// secret, unchanged from the pre-mask behavior.
+export const SECRET_MASK = '********';
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
    const authorized = verifyUser(req, res);
    if (authorized !== 'authorized') {
@@ -39,7 +61,14 @@ const getSettings = async (req: NextApiRequest, res: NextApiResponse<SettingsGet
    if (settings) {
       const { publicRuntimeConfig } = getConfig();
       const version = publicRuntimeConfig?.version;
-      return res.status(200).json({ settings: { ...settings, version } });
+      // Mask AFTER getAppSettings so the env-fallback values (e.g. SERPER_API_KEY resolved into
+      // scaping_api) are masked too, not just DB-stored ones. Non-empty secret = the mask;
+      // empty stays '' so a client can still tell set from unset.
+      const masked: Record<string, any> = { ...settings, version };
+      for (const field of SECRET_FIELDS) {
+         if (typeof masked[field] === 'string' && masked[field] !== '') { masked[field] = SECRET_MASK; }
+      }
+      return res.status(200).json({ settings: masked });
    }
    return res.status(400).json({ error: 'Error Loading Settings!' });
 };
@@ -52,31 +81,31 @@ const updateSettings = async (req: NextApiRequest, res: NextApiResponse<Settings
    }
    try {
       const cryptr = new Cryptr(process.env.SECRET as string);
-      const scaping_api = settings.scaping_api ? cryptr.encrypt(settings.scaping_api.trim()) : '';
-      const smtp_password = settings.smtp_password ? cryptr.encrypt(settings.smtp_password.trim()) : '';
-      const search_console_client_email = settings.search_console_client_email ? cryptr.encrypt(settings.search_console_client_email.trim()) : '';
-      const search_console_private_key = settings.search_console_private_key ? cryptr.encrypt(settings.search_console_private_key.trim()) : '';
-      const adwords_client_id = settings.adwords_client_id ? cryptr.encrypt(settings.adwords_client_id.trim()) : '';
-      const adwords_client_secret = settings.adwords_client_secret ? cryptr.encrypt(settings.adwords_client_secret.trim()) : '';
-      const adwords_developer_token = settings.adwords_developer_token ? cryptr.encrypt(settings.adwords_developer_token.trim()) : '';
-      const adwords_account_id = settings.adwords_account_id ? cryptr.encrypt(settings.adwords_account_id.trim()) : '';
-
-      const securedSettings = {
-         ...settings,
-         scaping_api,
-         smtp_password,
-         search_console_client_email,
-         search_console_private_key,
-         adwords_client_id,
-         adwords_client_secret,
-         adwords_developer_token,
-         adwords_account_id,
+      // Per secret field: the SECRET_MASK sentinel preserves the currently STORED encrypted value
+      // (so a GET, modify, PUT round-trip never clobbers a real key with the mask), a non-empty
+      // value is encrypted fresh, and an empty value explicitly clears (pre-mask behavior).
+      const stored = await getStoredSettings();
+      const encryptField = (field: typeof SECRET_FIELDS[number]): string => {
+         const incoming = settings[field];
+         if (incoming === SECRET_MASK) { return typeof stored[field] === 'string' ? stored[field] : ''; }
+         return incoming ? cryptr.encrypt(String(incoming).trim()) : '';
       };
+
+      const securedSettings: Record<string, any> = { ...settings };
+      for (const field of SECRET_FIELDS) {
+         securedSettings[field] = encryptField(field);
+      }
 
       // Persist the encrypted blob to the single global `setting` row (was data/settings.json). The
       // identical cryptr encryption above is preserved; only the storage target changed.
       await writeStoredSettings(securedSettings);
-      return res.status(200).json({ settings });
+      // Do not echo secrets back, not even the caller's own: mask non-empty secret fields in the
+      // response the same way GET does, so no HTTP response ever carries a credential value.
+      const echoed: Record<string, any> = { ...settings };
+      for (const field of SECRET_FIELDS) {
+         if (typeof echoed[field] === 'string' && echoed[field] !== '') { echoed[field] = SECRET_MASK; }
+      }
+      return res.status(200).json({ settings: echoed });
    } catch (error) {
       console.log('[ERROR] Updating App Settings. ', error);
       // A13: encrypt or DB write threw, so settings were NOT saved. Server error, not 200.

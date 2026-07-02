@@ -49,6 +49,8 @@ Where to verify: `utils/resolveAccount.ts`, `utils/verifyUser.ts`, and `utils/au
 
 The credentials you connect (Google Search Console keys, Google Ads keys, the SERP scraper key, SMTP password) are encrypted at rest with [`cryptr`](https://www.npmjs.com/package/cryptr) (AES-256) keyed by the app `SECRET` environment variable. They are decrypted only in memory, only to make the API call they belong to, and are never logged, never returned by the export endpoint, and never sent to a model.
 
+**No HTTP response returns a stored secret, with any credential.** `GET /api/settings` masks every secret field to a `********` sentinel (set vs unset stays distinguishable: unset is an empty string), the `PUT` echo is masked the same way, and a `PUT` carrying the sentinel preserves the stored value rather than overwriting it. So even the holder of the full-admin `APIKEY` cannot read a credential back out over HTTP; secrets go IN via the setup page, the key-drop flow, env vars, or a settings write, and never come back out. Where to verify: `SECRET_FIELDS` / `SECRET_MASK` in `pages/api/settings.ts` and the assertions in `__tests__/pages/settings-secret-masking.test.ts`.
+
 Your API key is stored as a SHA-256 hash, never as the clear key. The full key is your `APIKEY` env value.
 
 Where to verify:
