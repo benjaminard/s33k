@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { ensureSynced } from '../../../database/database';
 import authorize from '../../../utils/authorize';
 import {
-   KEY_DROP_SECRETS, KeyDropSecret, signKeyDropToken, KEY_DROP_TTL_MS, GSC_SERVICE_ACCOUNT_SETUP_STEPS,
+   KEY_DROP_SECRETS, KeyDropSecret, signKeyDropToken, keyDropTtlMs, GSC_SERVICE_ACCOUNT_SETUP_STEPS,
 } from '../../../utils/keyDrop';
 import { publicBaseUrlHeaderFree } from '../../../utils/setupState';
 
@@ -57,9 +57,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       const instructions = secret === 'gsc_service_account'
          ? 'Run the command in your own terminal, in the folder holding the service-account JSON you downloaded from '
             + 'Google Cloud (rename the file or edit the @filename part to match). The file goes straight from your '
-            + 'terminal to your s33k server: it never passes through this chat. The link is single-use and expires in '
-            + '15 minutes. The server response confirms the service-account email; add that email as a user with Full '
-            + 'permission on your property at search.google.com/search-console, then ask for get_insight.'
+            + 'terminal to your s33k server: it never passes through this chat. If your AI assistant has shell '
+            + 'access (for example Claude Code), you can simply ask it to run the command for you. The link is '
+            + 'single-use and expires in 60 minutes, enough time to finish the Google steps first. The server '
+            + 'response confirms the service-account email; add that email as a user with Full permission on your '
+            + 'property at search.google.com/search-console, then ask for get_insight.'
          : 'Run the command in your own terminal, paste the key, press Enter, then Ctrl-D. '
             + 'The key goes straight from your terminal to your s33k server: it never passes through this chat '
             + 'and never lands in shell history. The link is single-use and expires in 15 minutes.';
@@ -68,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
          token,
          url,
          command,
-         expiresInMinutes: Math.round(KEY_DROP_TTL_MS / 60000),
+         expiresInMinutes: Math.round(keyDropTtlMs(secret) / 60000),
          instructions,
          // The Google-side walkthrough rides along for the gsc kind so the LLM can guide the user
          // step by step (the steps live ONCE in utils/keyDrop.ts, shared with the knowledge layer).

@@ -469,7 +469,7 @@ const capabilities: CapabilityEntry[] = [
       category: 'onboarding',
       title: 'Mint a key-drop command (set a secret without pasting it into chat)',
       description: 'Enables a secret-gated module without the secret ever passing through the conversation. Returns a single-use, HMAC-signed '
-         + 'drop link that expires in 15 minutes, plus a ready-to-run one-liner. Two kinds: "serper" (SEO rank tracking) mints '
+         + 'drop link that expires in 15 minutes (60 for the file kind, so there is time to finish the Google steps), plus a ready-to-run one-liner. Two kinds: "serper" (SEO rank tracking) mints '
          + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`; the user pastes the key on stdin and presses Ctrl-D. '
          + '"gsc_service_account" (Google Search Console, the easiest connect path) mints '
          + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @service-account.json`; the user runs it in the folder holding '

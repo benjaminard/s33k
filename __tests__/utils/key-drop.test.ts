@@ -11,7 +11,7 @@ import { Readable } from 'stream';
 import type { NextApiRequest } from 'next';
 import {
    signKeyDropToken, verifyKeyDropToken, isNonceConsumed, markNonceConsumed, readRawBody,
-   KEY_DROP_TTL_MS, KEY_DROP_CONSUMED_FIELD,
+   KEY_DROP_TTL_MS, KEY_DROP_FILE_TTL_MS, keyDropTtlMs, KEY_DROP_CONSUMED_FIELD,
 } from '../../utils/keyDrop';
 
 const savedSecret = process.env.SECRET;
@@ -56,6 +56,20 @@ describe('signKeyDropToken / verifyKeyDropToken', () => {
       expect(verifyKeyDropToken(token, mintedAt + KEY_DROP_TTL_MS - 1000)).not.toBe(false);
    });
 
+   it('gives the file kind the longer window: a gsc token is valid where a serper one is dead', () => {
+      // Dogfood lesson: 15 minutes does not survive a first-timer's Google Cloud session, so the
+      // file kind gets 60. The TTL comes from the SIGNED kind claim, so it cannot be forged up.
+      const mintedAt = Date.now();
+      const thirtyMinutes = 30 * 60 * 1000;
+      const serperToken = signKeyDropToken('serper', mintedAt);
+      const gscToken = signKeyDropToken('gsc_service_account', mintedAt);
+      expect(verifyKeyDropToken(serperToken, mintedAt + thirtyMinutes)).toBe(false);
+      expect(verifyKeyDropToken(gscToken, mintedAt + thirtyMinutes)).not.toBe(false);
+      expect(verifyKeyDropToken(gscToken, mintedAt + KEY_DROP_FILE_TTL_MS + 1000)).toBe(false);
+      expect(keyDropTtlMs('serper')).toBe(KEY_DROP_TTL_MS);
+      expect(keyDropTtlMs('gsc_service_account')).toBe(KEY_DROP_FILE_TTL_MS);
+   });
+
    it('rejects a token minted suspiciously far in the future', () => {
       const now = Date.now();
       const token = signKeyDropToken('serper', now + 10 * 60 * 1000);
@@ -82,7 +96,9 @@ describe('single-use bookkeeping (isNonceConsumed / markNonceConsumed)', () => {
 
    it('prunes markers older than the TTL (their tokens can never verify again)', () => {
       const now = Date.now();
-      const stale = now - KEY_DROP_TTL_MS - 2 * 60 * 1000;
+      // The prune window follows the LONGEST kind TTL (file, 60 min), since the map does not
+      // record which kind a nonce belonged to.
+      const stale = now - KEY_DROP_FILE_TTL_MS - 2 * 60 * 1000;
       const stored = { [KEY_DROP_CONSUMED_FIELD]: { 'old-nonce': stale, 'recent-nonce': now - 1000 } };
       const map = markNonceConsumed(stored, 'new-nonce', now);
       expect(map['old-nonce']).toBeUndefined();

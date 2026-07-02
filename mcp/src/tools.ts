@@ -1064,7 +1064,7 @@ server.registerTool(
       title: 'Mint a key-drop command (set a secret without pasting it into chat)',
       description:
          'Enable a secret-gated module WITHOUT the secret ever passing through this conversation. Returns a '
-         + 'single-use, signed drop link (expires in 15 minutes) and a ready-to-run one-liner. Two kinds: '
+         + 'single-use, signed drop link (expires in 15 minutes, or 60 for the file kind) and a ready-to-run one-liner. Two kinds: '
          + '"serper" (SEO rank tracking) mints `curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`; '
          + 'the user runs it in their own terminal, pastes the key, presses Enter, then Ctrl-D. '
          + '"gsc_service_account" (Google Search Console, the easiest connect path) mints '
