@@ -46,13 +46,6 @@ const connection = process.env.DATABASE_URL
       storage: process.env.DATABASE_PATH || './data/database.sqlite',
    });
 
-// The usage half of the setup backfill rule (an install with tracked domains is in use and must
-// never resurface the installer) needs a domain count. setupState cannot import the Domain model
-// itself (a model import drags sequelize ESM into every jest suite touching that module, the
-// CLAUDE.md section B regression class), so the counter is INJECTED from here, where the model
-// import already exists. Registration is module-scope but the counter only runs at request time.
-registerSetupDomainCounter(() => Domain.count());
-
 // Memoized one-time schema sync.
 //
 // SECURITY (DoS amplification, audit area 1): route handlers used to `await db.sync()` on EVERY
@@ -67,6 +60,15 @@ registerSetupDomainCounter(() => Domain.count());
 let syncOnce: Promise<void> | null = null;
 export const ensureSynced = (): Promise<void> => {
    if (!syncOnce) {
+      // The usage half of the setup backfill rule needs a domain count. setupState cannot import
+      // the Domain model itself (a model import drags sequelize ESM into every jest suite touching
+      // that module, the CLAUDE.md section B regression class), so the counter is INJECTED from
+      // here. Registration MUST happen at call time, never module scope: this file sits inside the
+      // database -> setupState -> settingsStore -> database import cycle, and a module-scope call
+      // executes while setupState is still mid-initialization (a TDZ ReferenceError that killed
+      // next build at page-data collection for /setup). Inside ensureSynced, every module in the
+      // cycle finished initializing long ago.
+      registerSetupDomainCounter(() => Domain.count());
       syncOnce = connection.sync().then(() => undefined).catch((error) => {
          // Do not cache a failed sync: clear the memo so the next request retries rather than being
          // permanently wedged by one transient failure at boot (e.g. the DB not yet accepting calls).
