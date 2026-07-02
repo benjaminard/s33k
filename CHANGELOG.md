@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## 4.0.1 (2026-07-02)
+
+### Security hardening: no HTTP response returns a stored secret
+
+`GET /api/settings` previously returned connected credentials (SERP scraper key, SMTP password, Google keys) decrypted to the APIKEY holder, a read path the deleted web UI used to need. Nothing needs it anymore, so it is gone: secret fields are masked to a `********` sentinel on GET and in the PUT echo (unset stays an empty string, so set/unset remains distinguishable), and a PUT carrying the sentinel preserves the stored value, making GET-modify-PUT round-trips safe. Secrets now go in via the setup page, the key-drop flow, env vars, or a settings write, and never come back out over HTTP.
+
 ## 4.0.0 (2026-07-02)
 
 ### BREAKING CHANGES: the web UI is deleted; s33k is headless
