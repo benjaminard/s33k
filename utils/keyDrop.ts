@@ -27,6 +27,22 @@ export type KeyDropSecret = typeof KEY_DROP_SECRETS[number];
 /** How long a minted drop token stays valid. Same 15-minute window the GSC OAuth state uses. */
 export const KEY_DROP_TTL_MS = 15 * 60 * 1000;
 
+/** The file-kind window. Dogfooding proved 15 minutes does not survive a first-timer's Google
+ *  Cloud session (create project, enable API, create service account, download key): the token
+ *  expired before the file existed. An hour is still tight enough for a single-use signed link
+ *  whose payload is inert until the user separately grants it Search Console access. */
+export const KEY_DROP_FILE_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Per-kind token lifetime: string-paste kinds keep the tight 15 minutes; file kinds (the user has
+ * to go GET the file from a third party first) get the longer window.
+ * @param {KeyDropSecret} secret - The drop kind.
+ * @returns {number} Token lifetime in milliseconds.
+ */
+export const keyDropTtlMs = (secret: KeyDropSecret): number => (
+   secret === 'gsc_service_account' ? KEY_DROP_FILE_TTL_MS : KEY_DROP_TTL_MS
+);
+
 /** Hard cap on the pasted key body AFTER trimming. Serper keys are short; huge input is abuse. */
 export const MAX_DROP_KEY_LENGTH = 512;
 
@@ -50,14 +66,33 @@ export const maxDropKeyLength = (secret: KeyDropSecret): number => (
  * search). Step 5 happens AFTER the drop, using the client_email the consume route confirms.
  */
 export const GSC_SERVICE_ACCOUNT_SETUP_STEPS = [
+   '0. This is OPTIONAL and can be done any time (or never): everything else in s33k works without it. '
+      + 'Connecting adds one thing, Google\'s own query, impression, and click data via get_insight. '
+      + 'Budget 10 to 15 unhurried minutes for the Google side.',
    '1. Go to console.cloud.google.com and create a project (or select an existing one). A project is '
       + 'required: if you are prompted to pick an organization first, select it, then create a project '
       + 'inside it. The project is just a container; any name works.',
-   '2. Enable the "Google Search Console API" for that project (APIs and Services > Library).',
-   '3. Create a service account (IAM and Admin > Service Accounts > Create). No roles are needed.',
-   '4. Open the service account > Keys > Add Key > Create new key > JSON, and download the .json file.',
-   '5. After you send the file to s33k (the curl command), add the service account\'s email as a user with '
-      + 'Full permission on your property at search.google.com/search-console (Settings > Users and permissions).',
+   '2. Enable the "Google Search Console API": APIs and Services > Library > search for it > Enable.',
+   '3. Create a service account. Easiest path: APIs and Services > Credentials > Create credentials > '
+      + '"Help me choose", pick the Google Search Console API and "Application data" (that choice is what '
+      + 'creates a service account). Name it anything (e.g. s33k-reader). If it offers to "grant this '
+      + 'service account access to the project", SKIP it: no roles are needed, its permission comes from '
+      + 'Search Console later, not from Google Cloud.',
+   '4. Download the service account\'s JSON KEY FILE (this is NOT an "API key": if a screen offers to '
+      + 'create an API key, back out, that is a different credential and will not work). Go to '
+      + 'Credentials > Service Accounts > click your service account > Keys tab > Add Key > Create new '
+      + 'key > JSON > Create. A .json file downloads. Note where it lands and its exact filename '
+      + '(Google names it something long; you can rename it to service-account.json).',
+   '5. Send the file to s33k with the minted curl command, FROM the folder holding the file, with the '
+      + '@filename part matching the file\'s real name. If your AI assistant has shell access (for '
+      + 'example Claude Code), just ask it to run the command for you: the file goes terminal-to-server '
+      + 'and its contents never enter the chat. macOS note: Terminal may be blocked from reading the '
+      + 'Downloads folder ("operation not permitted"); moving the file to your home folder avoids that.',
+   '6. After the drop, s33k confirms the service account\'s email (a machine identity Google generated, '
+      + 'unrelated to your personal email). Add THAT email as a user with Full permission on your '
+      + 'property at search.google.com/search-console (Settings > Users and permissions). That grant is '
+      + 'how Google authorizes the data access; until you make it, the credential can read nothing. '
+      + 'Then ask your AI to run get_insight.',
 ] as const;
 
 /** The validated identity fields of a dropped service-account JSON, or the plain-text refusal. */
@@ -174,7 +209,9 @@ export const verifyKeyDropToken = (token: unknown, now = Date.now()): false | Ve
       const claims = JSON.parse(fromB64Url(encodedClaims).toString('utf-8')) as KeyDropClaims;
       if (!claims || typeof claims.n !== 'string' || typeof claims.t !== 'number') { return false; }
       if (!KEY_DROP_SECRETS.includes(claims.s)) { return false; }
-      if (now - claims.t > KEY_DROP_TTL_MS || claims.t > now + 60 * 1000) { return false; }
+      // The TTL is per kind and resolved from the SIGNED claim, so a tampered kind cannot buy a
+      // longer window (the signature check above already rejected it).
+      if (now - claims.t > keyDropTtlMs(claims.s) || claims.t > now + 60 * 1000) { return false; }
       return { secret: claims.s, nonce: claims.n };
    } catch {
       return false;
@@ -219,7 +256,9 @@ export const markNonceConsumed = (stored: Record<string, any>, nonce: string, no
       ? stored[CONSUMED_FIELD] as Record<string, unknown> : {};
    const pruned: Record<string, number> = {};
    Object.entries(previous).forEach(([key, at]) => {
-      if (typeof at === 'number' && now - at <= KEY_DROP_TTL_MS + 60 * 1000) { pruned[key] = at; }
+      // Prune against the LONGEST kind TTL: a marker must outlive every token that could still
+      // verify, and the map does not record which kind a nonce belonged to.
+      if (typeof at === 'number' && now - at <= KEY_DROP_FILE_TTL_MS + 60 * 1000) { pruned[key] = at; }
    });
    pruned[nonce] = now;
    return pruned;

@@ -141,7 +141,10 @@ describe('POST /api/key-drop (mint)', () => {
       );
       // The mint response carries the 5-step Google Cloud walkthrough so the LLM can guide the
       // user without web search.
-      expect(res.payload.googleCloudSteps).toHaveLength(5);
+      // Length follows the single-source steps array rather than a pinned number, so wording
+      // edits to the walkthrough do not break this test.
+      const { GSC_SERVICE_ACCOUNT_SETUP_STEPS } = jest.requireActual('../../utils/keyDrop');
+      expect(res.payload.googleCloudSteps).toHaveLength(GSC_SERVICE_ACCOUNT_SETUP_STEPS.length);
       expect(res.payload.googleCloudSteps.join(' ')).toContain('console.cloud.google.com');
       expect(res.payload.googleCloudSteps.join(' ')).toContain('search.google.com/search-console');
       expect(res.payload.instructions).toContain('search.google.com/search-console');
