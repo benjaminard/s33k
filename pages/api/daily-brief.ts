@@ -16,8 +16,9 @@ import {
 } from '../../utils/analytics';
 import type { WebVitalRow } from '../../utils/web-vitals';
 import { buildFormSubmissions, EventRow } from '../../utils/eventReports';
+import { cleanPath } from '../../utils/clean-path';
 import {
-   detectChanges, KeywordRank, AiEngineCount, TrafficTotals,
+   detectChanges, KeywordRank, AiEngineCount, TrafficTotals, PageTraffic,
 } from '../../utils/analyst';
 import { buildAeoRoi, AeoRoi, RoiKeyword } from '../../utils/aeo-roi';
 import { buildDashboard, DashboardKeyword, DashboardGoal } from '../../utils/dashboard';
@@ -131,6 +132,31 @@ const engineCounts = (map: Map<string, number>): AiEngineCount[] => (
    Array.from(map.entries()).map(([engine, visitors]) => ({ engine, visitors }))
 );
 
+/** Aggregate per-page pageviews by normalized path. Mirrors alerts.ts. */
+const pageviewsByPath = (pages: NormalizedPage[]): Map<string, number> => {
+   const map = new Map<string, number>();
+   (pages || []).forEach((p) => {
+      const key = p.pathClean || cleanPath(p.url);
+      if (!key) { return; }
+      map.set(key, (map.get(key) || 0) + (Number(p.page_views) || 0));
+   });
+   return map;
+};
+
+/** A Map<path, pageviews> rendered as the per-page traffic array the engine consumes. Mirrors alerts.ts. */
+const pageCounts = (map: Map<string, number>): PageTraffic[] => (
+   Array.from(map.entries()).map(([page, pageviews]) => ({ page, pageviews }))
+);
+
+/** Prior per-page pageviews = doubled-window counts minus current (floored at 0). Mirrors alerts.ts. */
+const priorPagesFromDiff = (doubled: Map<string, number>, current: Map<string, number>): PageTraffic[] => {
+   const out: PageTraffic[] = [];
+   doubled.forEach((doubledViews, page) => {
+      out.push({ page, pageviews: Math.max(0, doubledViews - (current.get(page) || 0)) });
+   });
+   return out;
+};
+
 /**
  * Resolve a keyword's position within a window from its rank history (most recent in-window
  * entry, or null when nothing lands in the window). Mirrors positionInWindow in alerts.ts.
@@ -181,7 +207,7 @@ export const composeDailyBriefForDomain = async (
       summaryCur, summaryDbl,
       referralsCur, referralsDbl,
       eventCur, eventPrior,
-      trafficWindow, referralsWindow, summaryWindow,
+      trafficWindow, trafficDbl, referralsWindow, summaryWindow,
       sessionRows, webVitalRows, goalRows,
    ] = await Promise.all([
       Keyword.findAll({ where: { domain, ...scopeWhere(account) } }).catch(() => [] as Keyword[]),
@@ -202,7 +228,10 @@ export const composeDailyBriefForDomain = async (
          raw: true,
       }).catch(() => [] as EventRow[]),
       // Dashboard pillar (current window): page traffic, referrals, summary for the headline opportunity page.
+      // The doubled-window page traffic additionally feeds the analyst's content-decay
+      // detector (prior per-page views = doubled minus current, same as the other pillars).
       provider.getPageTraffic(domain, period).catch((e) => ({ pages: [], error: String(e) })),
+      provider.getPageTraffic(domain, doubled).catch((e) => ({ pages: [], error: String(e) })),
       provider.getReferralSources(domain, period).catch((e) => ({ sources: [], error: String(e) })),
       provider.getSummary(domain, period).catch((e) => emptySummary(String(e))),
       // Sessions + web-vitals + goals for the dashboard headline and AEO ROI join.
@@ -246,18 +275,25 @@ export const composeDailyBriefForDomain = async (
    const currentFormSubmissions = buildFormSubmissions(eventCur as EventRow[]).totalSubmissions;
    const priorFormSubmissions = buildFormSubmissions(eventPrior as EventRow[]).totalSubmissions;
 
+   // Per-page traffic for the content-decay detector: current from the dashboard read,
+   // prior derived from the doubled window (additive subtraction, same as the other pillars).
+   const currentPageMap = pageviewsByPath((trafficWindow as { pages: NormalizedPage[] }).pages || []);
+   const doubledPageMap = pageviewsByPath((trafficDbl as { pages: NormalizedPage[] }).pages || []);
+
    const analyst = detectChanges(
       {
          keywords: currentKeywords,
          traffic: currentTraffic,
          aiEngines: currentAiEngines,
          formSubmissions: currentFormSubmissions,
+         pages: pageCounts(currentPageMap),
       },
       {
          keywords: priorKeywords,
          traffic: priorTraffic,
          aiEngines: priorAiEngines,
          formSubmissions: priorFormSubmissions,
+         pages: priorPagesFromDiff(doubledPageMap, currentPageMap),
       },
    );
 

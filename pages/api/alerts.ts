@@ -9,14 +9,19 @@ import resolveDomainAccess from '../../utils/domain-access';
 import { scopeWhere } from '../../utils/scope';
 import type Account from '../../database/models/account';
 import parseKeywords from '../../utils/parseKeywords';
-import { getAnalyticsProvider, ReferralSource, SummaryResult } from '../../utils/analytics';
+import {
+   getAnalyticsProvider, NormalizedPage, ReferralSource, SummaryResult,
+} from '../../utils/analytics';
 import { buildFormSubmissions, EventRow } from '../../utils/eventReports';
+import { cleanPath } from '../../utils/clean-path';
+import { domainsAboveOnSerp } from '../../utils/competitor-visibility';
 import {
    detectChanges,
    AnalystOutput,
    KeywordRank,
    AiEngineCount,
    TrafficTotals,
+   PageTraffic,
 } from '../../utils/analyst';
 
 /*
@@ -38,10 +43,13 @@ import {
  *
  * Where briefing.ts answers "what is the state of the site right now?", this
  * route answers the harder, more useful question by COMPARING two periods. It
- * pulls the current period and the immediately-prior period across all four
- * pillars (search rank, traffic, AI visibility, engagement/conversions) and runs
- * the pure rules-based engine (utils/analyst.ts) to emit a prioritized list of
- * plain-English alerts plus the single most important thing to do this week.
+ * pulls the current period and the immediately-prior period across the pillars
+ * (search rank, traffic, per-page content decay, AI visibility,
+ * engagement/conversions) and runs the pure rules-based engine (utils/analyst.ts)
+ * to emit a prioritized list of plain-English alerts plus the single most
+ * important thing to do this week. An optional ?since=<ISO timestamp> scopes the
+ * current window to [since, now) so an LLM can poll "what changed since
+ * yesterday" cheaply; the prior window stays the equal-length window before it.
  *
  * It is RULES-BASED: it does NOT call any LLM. The server reuses the SAME pillar
  * reads the other tools use (the analytics provider for traffic + AI referrals,
@@ -70,11 +78,14 @@ type AlertsResponse = {
    topPriority?: AnalystOutput['topPriority'],
    period?: string,
    comparedTo?: string,
+   /** Echoed back (ISO) when the caller scoped the current window with ?since=. */
+   since?: string,
    generatedFor?: { domain: string, period: string },
    /** Honest, per-pillar note when a signal could not be measured this period. */
    dataAvailability?: {
       rank: string,
       traffic: string,
+      content?: string,
       ai: string,
       conversions: string,
    },
@@ -155,6 +166,37 @@ const engineCounts = (map: Map<string, number>): AiEngineCount[] => (
    Array.from(map.entries()).map(([engine, visitors]) => ({ engine, visitors }))
 );
 
+/** Aggregate per-page pageviews by normalized path so keyword target pages join cleanly. */
+const pageviewsByPath = (pages: NormalizedPage[]): Map<string, number> => {
+   const map = new Map<string, number>();
+   (pages || []).forEach((p) => {
+      const key = p.pathClean || cleanPath(p.url);
+      if (!key) { return; }
+      map.set(key, (map.get(key) || 0) + (Number(p.page_views) || 0));
+   });
+   return map;
+};
+
+/** A Map<path, pageviews> rendered as the per-page traffic array the engine consumes. */
+const pageCounts = (map: Map<string, number>): PageTraffic[] => (
+   Array.from(map.entries()).map(([page, pageviews]) => ({ page, pageviews }))
+);
+
+/**
+ * Prior per-page pageviews = doubled-window counts minus current (floored at 0),
+ * the same additive-subtraction derivation the traffic and AI pillars use.
+ * @param {Map<string, number>} doubled - path -> pageviews over [prior+current].
+ * @param {Map<string, number>} current - path -> pageviews over [current].
+ * @returns {PageTraffic[]} The prior window's per-page pageviews.
+ */
+const priorPagesFromDiff = (doubled: Map<string, number>, current: Map<string, number>): PageTraffic[] => {
+   const out: PageTraffic[] = [];
+   doubled.forEach((doubledViews, page) => {
+      out.push({ page, pageviews: Math.max(0, doubledViews - (current.get(page) || 0)) });
+   });
+   return out;
+};
+
 /** Honest per-pillar note for RANK: explains when no rank change could be measured. */
 const rankAvailabilityNote = (keywordCount: number, anyHistory: boolean): string => {
    if (keywordCount === 0) {
@@ -173,6 +215,15 @@ const trafficAvailabilityNote = (error: string | null, prior: TrafficTotals): st
       return 'No prior-period traffic baseline, so traffic-change alerts are suppressed (honest, not a swing from zero).';
    }
    return 'Compared current vs prior traffic totals.';
+};
+
+/** Honest per-pillar note for CONTENT decay: explains a provider error or a missing baseline. */
+const contentAvailabilityNote = (error: string | null | undefined, priorPages: PageTraffic[]): string => {
+   if (error) { return `Per-page traffic unavailable this period (${error}); content-decay alerts suppressed.`; }
+   if (priorPages.length === 0) {
+      return 'No prior-period per-page traffic baseline, so content-decay alerts are suppressed.';
+   }
+   return 'Compared current vs prior per-page traffic for content decay.';
 };
 
 /** Honest per-pillar note for CONVERSIONS: explains a missing baseline or no data at all. */
@@ -227,6 +278,33 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
    const domain = req.query.domain as string;
    const period = (typeof req.query.period === 'string' && req.query.period) ? req.query.period : '7d';
 
+   // Optional ?since=<ISO timestamp>: scope the CURRENT window to [since, now) so an LLM
+   // can poll "what changed since yesterday" cheaply, without re-reading a whole period.
+   // The prior window stays the equal-length window immediately before it, so the change
+   // math is identical. Validation is strict and the error explicit: an unparseable value,
+   // a future value, or one past the 365-day lookback cap (the same bound periodStartMs
+   // enforces) is a clear 400, never a silent default. When since is set it takes
+   // precedence over period.
+   let sinceIso: string | undefined;
+   let sinceMs: number | null = null;
+   if (req.query.since !== undefined) {
+      const raw = req.query.since;
+      const parsed = typeof raw === 'string' ? new Date(raw).getTime() : NaN;
+      if (!Number.isFinite(parsed)) {
+         return res.status(400).json({
+            error: 'Invalid since: pass an ISO 8601 timestamp, e.g. "2026-07-01T00:00:00Z".',
+         });
+      }
+      if (parsed >= Date.now()) {
+         return res.status(400).json({ error: 'Invalid since: the timestamp must be in the past.' });
+      }
+      if (parsed < Date.now() - 365 * 86400e3) {
+         return res.status(400).json({ error: 'Invalid since: the timestamp must be within the last 365 days.' });
+      }
+      sinceMs = parsed;
+      sinceIso = new Date(parsed).toJSON();
+   }
+
    // Ownership gate, identical to scoreboard.ts / briefing.ts. With MULTI_TENANT off
    // scopeWhere returns {} so this is an existence check; with it on, a tenant can only
    // analyze a domain it owns, and every read below is keyed behind this single check.
@@ -235,8 +313,21 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
       return res.status(403).json({ error: 'Domain not found for this account' });
    }
 
-   const { now, curStart, priorStart } = windowBounds(period);
-   const doubled = doublePeriod(period);
+   let bounds: { now: number, curStart: number, priorStart: number };
+   if (sinceMs !== null) {
+      const nowMs = Date.now();
+      bounds = { now: nowMs, curStart: sinceMs, priorStart: sinceMs - (nowMs - sinceMs) };
+   } else {
+      bounds = windowBounds(period);
+   }
+   const { now, curStart, priorStart } = bounds;
+   // The analytics provider only accepts a relative period string, so a since-scoped
+   // window is expressed as whole hours back from now (ceil, so it always COVERS the
+   // window; the DB-backed pillars use the exact [curStart, now) bounds regardless).
+   const effectivePeriod = sinceMs !== null
+      ? `${Math.max(1, Math.ceil((now - curStart) / 3600e3))}h`
+      : period;
+   const doubled = doublePeriod(effectivePeriod);
    const provider = getAnalyticsProvider();
 
    try {
@@ -249,13 +340,16 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
          keywordRows,
          summaryCur, summaryDbl,
          referralsCur, referralsDbl,
+         pagesCur, pagesDbl,
          eventCur, eventPrior,
       ] = await Promise.all([
          Keyword.findAll({ where: { domain, ...scopeWhere(account) } }).catch(() => [] as Keyword[]),
-         provider.getSummary(domain, period).catch((e) => emptySummary(String(e))),
+         provider.getSummary(domain, effectivePeriod).catch((e) => emptySummary(String(e))),
          provider.getSummary(domain, doubled).catch((e) => emptySummary(String(e))),
-         provider.getReferralSources(domain, period).catch((e) => ({ sources: [], error: String(e) })),
+         provider.getReferralSources(domain, effectivePeriod).catch((e) => ({ sources: [], error: String(e) })),
          provider.getReferralSources(domain, doubled).catch((e) => ({ sources: [], error: String(e) })),
+         provider.getPageTraffic(domain, effectivePeriod).catch((e) => ({ pages: [], error: String(e) })),
+         provider.getPageTraffic(domain, doubled).catch((e) => ({ pages: [], error: String(e) })),
          S33kEvent.findAll({
             where: { domain, type: 'form_submit', created: { [Op.gte]: new Date(curStart).toJSON() }, ...scopeWhere(account) },
             raw: true,
@@ -277,7 +371,18 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
       const priorKeywords: KeywordRank[] = [];
       keywords.forEach((kw) => {
          const base = { keyword: kw.keyword, targetPage: kw.target_page || undefined };
-         currentKeywords.push({ ...base, position: positionInWindow(kw.history, curStart, now) });
+         // SERP context for rank alerts: the stored SERP (lastResult) pairs with the
+         // keyword's LAST SCRAPED position, so "who is directly above you now" is computed
+         // against kw.position from that same results page. A local join over data already
+         // on disk: no new scraping, no new collection.
+         const above = kw.position > 0
+            ? domainsAboveOnSerp(Array.isArray(kw.lastResult) ? kw.lastResult : [], kw.position, domain)
+            : [];
+         currentKeywords.push({
+            ...base,
+            position: positionInWindow(kw.history, curStart, now),
+            ...(above.length > 0 ? { serpDomainsAbove: above } : {}),
+         });
          priorKeywords.push({ ...base, position: positionInWindow(kw.history, priorStart, curStart) });
       });
       const anyRankHistory = keywords.some((kw) => Object.keys(kw.history || {}).length > 0);
@@ -295,6 +400,15 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
          visitors: Math.max(0, (dblSummary.visitors || 0) - currentTraffic.visitors),
       };
       const trafficNote = trafficAvailabilityNote(curSummary.error, priorTraffic);
+
+      // --- CONTENT: per-page pageviews, prior = doubled minus current (additive). --------
+      const curPages = pagesCur as { pages: NormalizedPage[], error?: string | null };
+      const dblPages = pagesDbl as { pages: NormalizedPage[], error?: string | null };
+      const currentPageMap = pageviewsByPath(curPages.pages || []);
+      const doubledPageMap = pageviewsByPath(dblPages.pages || []);
+      const currentPages = pageCounts(currentPageMap);
+      const priorPages = priorPagesFromDiff(doubledPageMap, currentPageMap);
+      const contentNote = contentAvailabilityNote(curPages.error, priorPages);
 
       // --- AI: per-engine referral visitors (current + derived prior). --
       const curRef = referralsCur as { sources: ReferralSource[], error: string | null };
@@ -320,24 +434,28 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
             traffic: currentTraffic,
             aiEngines: currentAiEngines,
             formSubmissions: currentFormSubmissions,
+            pages: currentPages,
          },
          {
             keywords: priorKeywords,
             traffic: priorTraffic,
             aiEngines: priorAiEngines,
             formSubmissions: priorFormSubmissions,
+            pages: priorPages,
          },
       );
 
       return res.status(200).json({
          alerts: output.alerts,
          topPriority: output.topPriority,
-         period,
-         comparedTo: `the prior ${period} window`,
-         generatedFor: { domain, period },
+         period: effectivePeriod,
+         comparedTo: `the prior ${effectivePeriod} window`,
+         ...(sinceIso ? { since: sinceIso } : {}),
+         generatedFor: { domain, period: effectivePeriod },
          dataAvailability: {
             rank: rankNote,
             traffic: trafficNote,
+            content: contentNote,
             ai: aiNote,
             conversions: conversionsNote,
          },
@@ -351,9 +469,10 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
       return res.status(200).json({
          alerts: [],
          topPriority: null,
-         period,
-         comparedTo: `the prior ${period} window`,
-         generatedFor: { domain, period },
+         period: effectivePeriod,
+         comparedTo: `the prior ${effectivePeriod} window`,
+         ...(sinceIso ? { since: sinceIso } : {}),
+         generatedFor: { domain, period: effectivePeriod },
          error: 'Error Building Alerts for this Domain.',
       });
    }
