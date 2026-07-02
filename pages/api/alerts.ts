@@ -321,11 +321,15 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
       bounds = windowBounds(period);
    }
    const { now, curStart, priorStart } = bounds;
-   // The analytics provider only accepts a relative period string, so a since-scoped
-   // window is expressed as whole hours back from now (ceil, so it always COVERS the
-   // window; the DB-backed pillars use the exact [curStart, now) bounds regardless).
+   // The analytics provider only accepts a relative period string, and its period
+   // grammar FLOORS any window at 1 day (eventPeriodCutoff's Math.max(1, days)). A
+   // since-scoped window must therefore be floored at 24h here too: below that, the
+   // current read would silently cover 24h while the doubled read covers a different
+   // span, and the doubled-minus-current subtraction would compare unequal windows
+   // and fabricate swings. The DB-backed pillars use the exact [curStart, now)
+   // bounds regardless, so they stay finer-grained than the provider reads.
    const effectivePeriod = sinceMs !== null
-      ? `${Math.max(1, Math.ceil((now - curStart) / 3600e3))}h`
+      ? `${Math.max(24, Math.ceil((now - curStart) / 3600e3))}h`
       : period;
    const doubled = doublePeriod(effectivePeriod);
    const provider = getAnalyticsProvider();

@@ -402,6 +402,26 @@ describe('alerts route: the since parameter (poll "what changed since ...")', ()
       expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '48h');
    });
 
+   it('floors a short since window at 24h so provider reads compare equal windows', async () => {
+      // The provider's period grammar floors any window at 1 day (eventPeriodCutoff's
+      // Math.max(1, days)). Without the 24h floor here, since=6h would read a 24h current
+      // window against a differently-sized doubled window and fabricate swings from the
+      // unequal-window subtraction. The floor keeps doubled at exactly 2x and the echoed
+      // period honest about what the provider actually read.
+      const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toJSON();
+      const provider = providerStub();
+      mockedGetProvider.mockReturnValue(provider);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.period).toBe('24h');
+      expect(captured.body.comparedTo).toBe('the prior 24h window');
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '24h');
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '48h');
+   });
+
    it('takes precedence over period when both are supplied', async () => {
       const since = new Date(Date.now() - 23.5 * 60 * 60 * 1000).toJSON();
       const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since, period: '30d' });
