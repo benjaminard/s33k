@@ -175,7 +175,11 @@ describe('POST /api/setup', () => {
 });
 
 describe('GET /setup (getServerSideProps gate)', () => {
-   const ctx = (token?: string) => ({ query: token === undefined ? {} : { token } } as any);
+   // gSSP sets Cache-Control (no-store: the page embeds the APIKEY), so the context needs a res.
+   const ctx = (token?: string) => ({
+      query: token === undefined ? {} : { token },
+      res: { setHeader: jest.fn() },
+   } as any);
 
    it('404s with no token', async () => {
       await expect(getServerSideProps(ctx())).resolves.toEqual({ notFound: true });

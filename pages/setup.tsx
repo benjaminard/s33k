@@ -29,7 +29,12 @@ type SetupPageProps = {
 };
 
 export const getServerSideProps: GetServerSideProps<SetupPageProps> = async (context) => {
-   // Completed instances (flag, backfill rule, or env-configured scraper) never see this page.
+   // This response carries the instance APIKEY and echoes the boot token, so it must never land in
+   // any shared cache. Next does not cache gSSP responses by itself, but a proxy or CDN placed in
+   // front later could; no-store is cheap insurance on the one page where a cache hit is a leak.
+   context.res.setHeader('Cache-Control', 'private, no-store');
+   // Completed instances (flag, backfill rule, existing domains, or env-configured scraper) never
+   // see this page.
    if (await isSetupCompleted()) { return { notFound: true }; }
    const token = typeof context.query.token === 'string' ? context.query.token : '';
    if (!verifySetupToken(token)) { return { notFound: true }; }

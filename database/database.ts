@@ -4,7 +4,7 @@ import pg from 'pg';
 // NOTE the import cycle (database -> setupState -> settingsStore -> database) is deliberate and
 // safe: every cross-module use is deferred to call time (no module-scope calls), which ESM live
 // bindings resolve correctly. announceSetupOnce is only INVOKED after the first successful sync.
-import { announceSetupOnce } from '../utils/setupState';
+import { announceSetupOnce, registerSetupDomainCounter } from '../utils/setupState';
 import Domain from './models/domain';
 import Keyword from './models/keyword';
 import CrawlerHit from './models/crawlerHit';
@@ -45,6 +45,13 @@ const connection = process.env.DATABASE_URL
       models,
       storage: process.env.DATABASE_PATH || './data/database.sqlite',
    });
+
+// The usage half of the setup backfill rule (an install with tracked domains is in use and must
+// never resurface the installer) needs a domain count. setupState cannot import the Domain model
+// itself (a model import drags sequelize ESM into every jest suite touching that module, the
+// CLAUDE.md section B regression class), so the counter is INJECTED from here, where the model
+// import already exists. Registration is module-scope but the counter only runs at request time.
+registerSetupDomainCounter(() => Domain.count());
 
 // Memoized one-time schema sync.
 //

@@ -23,6 +23,7 @@ jest.mock('../../utils/settingsStore', () => ({
 import {
    getSetupToken, verifySetupToken, markSetupCompleted, isSetupCompleted, announceSetupOnce,
    computeSetupCompleted, computeSeoConfigured, publicBaseUrlHeaderFree, __resetSetupRuntimeState,
+   registerSetupDomainCounter,
 } from '../../utils/setupState';
 // eslint-disable-next-line import/first
 import { getStoredSettings, writeStoredSettings } from '../../utils/settingsStore';
@@ -130,6 +131,23 @@ describe('isSetupCompleted (flag OR backfill OR env-configured)', () => {
    it('stored settings win without any env (the Ben-production shape)', async () => {
       mockRead.mockResolvedValue({ scaping_api: 'encrypted-blob', scraper_type: 'serper' });
       await expect(isSetupCompleted()).resolves.toBe(true);
+   });
+
+   it('an existing tracked domain counts as completed (the analytics-only install shape)', async () => {
+      // No credential in settings, no env: only usage. The installer must never resurface on an
+      // in-use analytics-only install after an upgrade.
+      registerSetupDomainCounter(async () => 1);
+      await expect(isSetupCompleted()).resolves.toBe(true);
+   });
+
+   it('a failing domain counter falls back to the settings-based answer', async () => {
+      registerSetupDomainCounter(async () => { throw new Error('db down'); });
+      await expect(isSetupCompleted()).resolves.toBe(false);
+   });
+
+   it('a zero domain count does not complete a truly fresh install', async () => {
+      registerSetupDomainCounter(async () => 0);
+      await expect(isSetupCompleted()).resolves.toBe(false);
    });
 });
 

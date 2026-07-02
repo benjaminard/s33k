@@ -54,11 +54,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    const verified = verifyKeyDropToken(req.query.nonce);
    if (!verified) { return res.status(404).send('Not Found'); }
 
-   // Single-use: within-process guard first (closes the same-instant race), then the durable map.
+   // Single-use: the within-process guard must check AND claim with no await between them, or two
+   // same-instant requests would both pass .has() before either recorded the claim and the guard
+   // would assert a protection it does not provide. Claim synchronously right after verification,
+   // then consult the durable map for replays minted before this process started.
    if (consumedThisProcess().has(verified.nonce)) { return res.status(404).send('Not Found'); }
+   consumedThisProcess().add(verified.nonce);
    const stored = await getStoredSettings();
    if (isNonceConsumed(stored, verified.nonce)) { return res.status(404).send('Not Found'); }
-   consumedThisProcess().add(verified.nonce);
 
    try {
       let raw = '';
