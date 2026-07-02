@@ -27,12 +27,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
    }
    if (req.method === 'POST') {
       // mode=retry is the hourly DB-backed retry job (replaces the old failed_queue.json file): it
-      // re-scrapes ONLY keywords that currently have a real lastUpdateError. Any other POST is the
-      // normal full scrape cron. Both reuse the same Bearer auth.
-      if (req.query.mode === 'retry') {
+      // re-scrapes ONLY keywords that currently have a real lastUpdateError. No mode (or mode=scrape)
+      // is the normal full scrape cron. Both reuse the same Bearer auth. Any OTHER mode is rejected:
+      // a stale caller must never fall through to the full scrape, because every accidental full
+      // sweep spends real SERP credits (a leftover mode=dunning cron did exactly that, daily).
+      const { mode } = req.query;
+      if (mode === 'retry') {
          return cronRetryFailedKeywords(req, res, account);
       }
-      return cronRefreshkeywords(req, res, account);
+      if (mode === undefined || mode === 'scrape') {
+         return cronRefreshkeywords(req, res, account);
+      }
+      return res.status(400).json({ started: false, error: `Unknown cron mode: ${String(mode)}` });
    }
    return res.status(405).json({ error: 'Method Not Allowed.' });
 }

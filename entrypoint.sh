@@ -50,17 +50,6 @@ if [ "$NODE_ENV" = "production" ]; then
     echo "[SECURITY] Refusing to start: NEXT_PUBLIC_APP_URL is unset. Set it to your real public URL (e.g. https://your-app.example.com, see DEPLOY.md) so user-facing links are not built from forgeable request headers." >&2
     fail=1
   fi
-  # Billing config completeness: if Stripe is enabled (STRIPE_SECRET_KEY set) but the webhook signing
-  # secret is missing, /api/billing/webhook silently 503s every event, so a paid checkout never flips
-  # the account to active (no unlock), a failed payment never locks, and a cancel never relocks. The
-  # account would sit in a stale state with no error surfaced. Refuse to boot so an incomplete billing
-  # config is a clear startup failure, not a silent revenue/entitlement bug. (STRIPE_PRICE_PER_SITE is
-  # checked at runtime with a clean 503 on checkout, so it is not boot-fatal; the webhook secret is,
-  # because its absence is invisible until a real Stripe event is dropped.)
-  if [ -n "$STRIPE_SECRET_KEY" ] && [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
-    echo "[SECURITY] Refusing to start: STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is unset. Stripe webhooks would 503 and billing state (unlock/lock/cancel) would never apply. Set STRIPE_WEBHOOK_SECRET from your Stripe webhook endpoint (see GO_LIVE_MULTI_TENANT.md)." >&2
-    fail=1
-  fi
   if [ "$fail" = "1" ]; then
     echo "[SECURITY] Set strong APIKEY, SECRET, and PASSWORD env vars (see DEPLOY.md) and redeploy." >&2
     exit 1
