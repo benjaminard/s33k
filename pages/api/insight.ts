@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ensureSynced } from '../../database/database';
 import { getCountryInsight, getKeywordsInsight, getPagesInsight } from '../../utils/insight';
+import { summarizeInsight, InsightSummary, INSIGHT_MAX_LIMIT } from '../../utils/insight-summary';
 import { fetchDomainSCData, getSearchConsoleApiInfo, readLocalSCData, hasSearchConsoleCredentials } from '../../utils/searchConsole';
 import authorize from '../../utils/authorize';
 import resolveDomainAccess from '../../utils/domain-access';
@@ -8,7 +9,7 @@ import type Account from '../../database/models/account';
 import Domain from '../../database/models/domain';
 
 type SCInsightRes = {
-   data: InsightDataType | null,
+   data: InsightDataType | InsightSummary | null,
    error?: string|null,
 }
 
@@ -26,6 +27,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 const getDomainSearchConsoleInsight = async (req: NextApiRequest, res: NextApiResponse<SCInsightRes>, account?: Account | null) => {
    if (!req.query.domain && typeof req.query.domain !== 'string') return res.status(400).json({ data: null, error: 'Domain is Missing.' });
+
+   // SUMMARY-FIRST AND BOUNDED BY DEFAULT (the entry-pages convention). The raw insight payload on
+   // a real Search Console property is unbounded (hundreds of zero-click keyword rows plus full
+   // pages/countries/days arrays, ~113KB observed) and overflowed the consuming LLM on its first
+   // real use. detail=true is the escape hatch for the full arrays; limit clamps to
+   // 1..INSIGHT_MAX_LIMIT and widens/narrows the keyword and page lists.
+   const detail = req.query.detail === 'true' || req.query.detail === '1';
+   const rawLimit = Number.parseInt(typeof req.query.limit === 'string' ? req.query.limit : '', 10);
+   const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(INSIGHT_MAX_LIMIT, rawLimit)) : undefined;
+   const shapeInsight = (full: InsightDataType): InsightDataType | InsightSummary => (detail ? full : summarizeInsight(full, limit));
 
    // Resolve access by the CANONICAL domain only. The legacy slug-decode fallback ("-" -> ".",
    // "_" -> "-") was removed (third adversarial review): with registration canonicalized and
@@ -56,7 +67,7 @@ const getDomainSearchConsoleInsight = async (req: NextApiRequest, res: NextApiRe
       const fetchTimeDiff = new Date().getTime() - (oldFetchedDate ? new Date(oldFetchedDate as string).getTime() : 0);
       if (localSCData.stats && localSCData.stats.length && fetchTimeDiff <= 86400000) {
          const response = getInsightFromSCData(localSCData);
-         return res.status(200).json({ data: response });
+         return res.status(200).json({ data: shapeInsight(response) });
       }
    }
 
@@ -69,7 +80,7 @@ const getDomainSearchConsoleInsight = async (req: NextApiRequest, res: NextApiRe
       }
       const scData = await fetchDomainSCData(domainObj, scDomainAPI);
       const response = getInsightFromSCData(scData);
-      return res.status(200).json({ data: response });
+      return res.status(200).json({ data: shapeInsight(response) });
    } catch (error) {
       console.log('[ERROR] Getting Domain Insight: ', domainname, error);
       return res.status(400).json({ data: null, error: 'Error Fetching Stats from Google Search Console.' });

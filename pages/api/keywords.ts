@@ -12,13 +12,16 @@ import { reserveKeywordSlots, CapExceeded } from '../../utils/caps-guard';
 import { rateLimit } from '../../utils/rate-limit';
 import type Account from '../../database/models/account';
 import parseKeywords from '../../utils/parseKeywords';
+import { compactKeywordResponse, CompactKeyword } from '../../utils/serp-compact';
 import { integrateKeywordSCData, readLocalSCData } from '../../utils/searchConsole';
 import refreshAndUpdateKeywords from '../../utils/refresh';
 import { getKeywordsVolume, updateKeywordsVolumeData } from '../../utils/adwords';
 import { removeFromRetryQueue } from '../../utils/scraper';
 
 type KeywordsGetResponse = {
-   keywords?: KeywordType[],
+   // GET returns full KeywordType rows (with lastResult emptied); the WRITE responses (POST/PUT)
+   // return CompactKeyword rows, where the lastResult echo is replaced by serpTop + serpResultCount.
+   keywords?: KeywordType[] | CompactKeyword[],
    error?: string|null,
 }
 
@@ -109,6 +112,12 @@ const addKeywords = async (req: NextApiRequest, res: NextApiResponse<KeywordsGet
       if (keywords.some((k: KeywordAddPayload) => !k || typeof k.domain !== 'string' || !k.domain.trim())) {
          return res.status(400).json({ error: 'Every keyword must include a domain.' });
       }
+      // A schema-documented argument must either work or be rejected, never silently drop: a
+      // non-string target_page would previously coerce/garble on insert while the caller assumed it
+      // stored. Reject it loudly instead (same contract as the PUT path below).
+      if (keywords.some((k: KeywordAddPayload) => k.target_page !== undefined && typeof k.target_page !== 'string')) {
+         return res.status(400).json({ error: 'target_page must be a string when provided.' });
+      }
 
       // OWNERSHIP GATE (security review #2): the caller must OWN every domain they add
       // keywords for, before any cost-bearing bulkCreate + scrape. scopeWhere is {} when
@@ -174,7 +183,9 @@ const addKeywords = async (req: NextApiRequest, res: NextApiResponse<KeywordsGet
             domain,
             country,
             city,
-            target_page: target_page || '',
+            // Trimmed, exactly like the PUT path stores it, so a keyword created with target_page
+            // joins page_scoreboard identically to one updated with it.
+            target_page: typeof target_page === 'string' ? target_page.trim() : '',
             position: 0,
             updating: true,
             history: JSON.stringify({}),
@@ -210,7 +221,9 @@ const addKeywords = async (req: NextApiRequest, res: NextApiResponse<KeywordsGet
             }
          }
 
-         return res.status(201).json({ keywords: keywordsParsed });
+         // Write responses are compact: replace the lastResult echo ([] on create) with
+         // serpTop + serpResultCount, matching the PUT response shape.
+         return res.status(201).json({ keywords: keywordsParsed.map(compactKeywordResponse) });
       } catch (error) {
          // Safety net: caps are unlimited in single-user mode, so this should not fire.
          if (error instanceof CapExceeded) {
@@ -249,29 +262,36 @@ const updateKeywords = async (req: NextApiRequest, res: NextApiResponse<Keywords
    if (!req.query.id && typeof req.query.id !== 'string') {
       return res.status(400).json({ error: 'keyword ID is Required!' });
    }
-   if (req.body.sticky === undefined && !req.body.tags === undefined && req.body.target_page === undefined) {
+   // (This guard used to read `!req.body.tags === undefined`, a boolean-vs-undefined compare that
+   // is always false, so the check never fired. Fixed to the intended empty-payload rejection.)
+   if (req.body.sticky === undefined && req.body.tags === undefined && req.body.target_page === undefined) {
       return res.status(400).json({ error: 'keyword Payload Missing!' });
    }
    const keywordIDs = (req.query.id as string).split(',').map((item) => parseInt(item, 10));
    const { sticky, tags, target_page } = req.body;
+   // Same work-or-reject contract as the POST path: a documented argument is either applied or
+   // rejected loudly, never silently mangled.
+   if (target_page !== undefined && typeof target_page !== 'string') {
+      return res.status(400).json({ error: 'target_page must be a string when provided.' });
+   }
 
    try {
       const scope = scopeWhere(account);
-      let keywords: KeywordType[] = [];
+      const keywords: KeywordType[] = [];
       if (target_page !== undefined) {
-         await Keyword.update({ target_page }, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
+         await Keyword.update({ target_page: target_page.trim() }, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
          const updatedKeywords:Keyword[] = await Keyword.findAll({ where: { ID: { [Op.in]: keywordIDs }, ...scope } });
          const formattedKeywords = updatedKeywords.map((el) => el.get({ plain: true }));
-         keywords = parseKeywords(formattedKeywords);
-         return res.status(200).json({ keywords });
+         // The write response is compact: the caller set a target page, they do not need the raw
+         // 100-position SERP echoed back per keyword. serpTop + serpResultCount replace lastResult.
+         return res.status(200).json({ keywords: parseKeywords(formattedKeywords).map(compactKeywordResponse) });
       }
       if (sticky !== undefined) {
          await Keyword.update({ sticky }, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
          const updateQuery = { where: { ID: { [Op.in]: keywordIDs }, ...scope } };
          const updatedKeywords:Keyword[] = await Keyword.findAll(updateQuery);
          const formattedKeywords = updatedKeywords.map((el) => el.get({ plain: true }));
-          keywords = parseKeywords(formattedKeywords);
-         return res.status(200).json({ keywords });
+         return res.status(200).json({ keywords: parseKeywords(formattedKeywords).map(compactKeywordResponse) });
       }
       if (tags) {
          const tagsKeywordIDs = Object.keys(tags);

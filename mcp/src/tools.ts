@@ -196,7 +196,7 @@ server.registerTool(
    {
       title: 'Add keyword',
       description:
-         'Add one keyword to track for a domain and queue a background Google SERP scrape, so its rank appears shortly after. Use this to start tracking a search term, ideally passing target_page so the keyword joins to a page in page_scoreboard. To add many keywords at once, call this tool once per keyword.',
+         'Add one keyword to track for a domain and queue a background Google SERP scrape, so its rank appears shortly after. Use this to start tracking a search term, ideally passing target_page so the keyword joins to a page in page_scoreboard. To add many keywords at once, call this tool once per keyword. The response returns the created keyword (including its stored target_page) in compact form: serpTop (top 3 ranked results) plus serpResultCount instead of a raw SERP array.',
       inputSchema: {
          keyword: z.string().describe('The search keyword/phrase to track.'),
          domain: z.string().describe('The domain to track this keyword for, e.g. "example.com".'),
@@ -282,14 +282,26 @@ server.registerTool(
    {
       title: 'Get Search Console insight',
       description:
-         'Read Google Search Console insight for a domain: its top pages, top keywords, top countries, and aggregate stats. Use this for real impression and click data straight from Google, beyond the keywords you explicitly track. Requires Search Console to be connected, otherwise it returns an error. The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends the service-account JSON from the user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
+         'Read Google Search Console insight for a domain, summary-first and bounded by default so the response fits an LLM context window: aggregate stats (clicks, impressions, ctr, position, window), the top 25 keywords by clicks, 15 untapped keywords (low-click rows ranked by impressions, the demand a marketer mines), the top 15 pages by clicks, the top 10 countries, and a compact daily series (date, clicks, impressions, position). A meta block carries the full totals, a truncated flag, and a hint. Pass limit (clamped 1..200) to widen or narrow the keyword and page lists, or detail=true for the full unbounded arrays (every keyword, page, country, and day; can be very large). Use this for real impression and click data straight from Google, beyond the keywords you explicitly track. Requires Search Console to be connected, otherwise it returns an error. The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends the service-account JSON from the user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
       inputSchema: {
          domain: z.string().describe('The domain to get insight for, e.g. "example.com".'),
+         limit: z
+            .number()
+            .int()
+            .optional()
+            .describe('Max rows for the keyword and page lists (clamped 1..200). Defaults: 25 top keywords, 15 untapped keywords, 15 pages.'),
+         detail: z
+            .boolean()
+            .optional()
+            .describe('Pass true for the full unbounded arrays (every keyword, page, country, and day). Default is the bounded summary.'),
       },
    },
-   async ({ domain }) => {
+   async ({ domain, limit, detail }) => {
       try {
-         const data = await s33kFetch('/api/insight', { query: { domain } });
+         const query: Record<string, string> = { domain };
+         if (limit !== undefined) { query.limit = String(limit); }
+         if (detail) { query.detail = 'true'; }
+         const data = await s33kFetch('/api/insight', { query });
          return jsonResult(data.data ?? data);
       } catch (err) {
          return errorResult(err);
@@ -2308,7 +2320,7 @@ server.registerTool(
    {
       title: 'Update keyword',
       description:
-         'Update one or more tracked keywords by ID. Use this to set a keyword\'s target_page (the page that should rank for it) so it joins correctly in page_scoreboard, or to toggle its sticky pin. Get the IDs from list_keywords first. Exactly one of target_page or sticky is applied per call, and target_page takes precedence if both are given.',
+         'Update one or more tracked keywords by ID. Use this to set a keyword\'s target_page (the page that should rank for it) so it joins correctly in page_scoreboard, or to toggle its sticky pin. Get the IDs from list_keywords first. Exactly one of target_page or sticky is applied per call, and target_page takes precedence if both are given. The response returns each updated keyword in compact form: serpTop (top 3 ranked results: position, url, title) plus serpResultCount instead of the raw 100-position SERP array.',
       inputSchema: {
          ids: z
             .array(z.number().int())
