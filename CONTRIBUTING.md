@@ -11,8 +11,8 @@ git clone https://github.com/benjaminard/s33k.git
 cd s33k
 nvm use 20
 npm ci
-cp .env.example .env   # set USER_NAME and PASSWORD, generate SECRET and APIKEY (openssl rand -hex 34 / -hex 24)
-npm run dev            # http://localhost:3000, on a local SQLite database
+cp .env.example .env   # generate SECRET and APIKEY (openssl rand -hex 34 / -hex 24)
+npm run dev            # serves the API + MCP endpoint at http://localhost:3000, on a local SQLite database
 ```
 
 Or run the whole stack in Docker: `./scripts/setup-env.sh && docker compose up -d --build`.

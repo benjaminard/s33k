@@ -5,7 +5,7 @@ What s33k is focused on, what is queued behind it, and what it deliberately will
 ## Current focus
 
 1. **The analyst layer.** The rules-based briefing (`briefing`, `daily_brief`, `alerts`, `insights`) is the product's front door, and it should notice more than it does: content decay (a page whose traffic slides for weeks while its rank holds), anomaly spikes, and SERP context on rank alerts (who moved above you) so your LLM can explain a change, not just report it.
-2. **A stranger's first hour.** Screenshots in the README, honest cost math, and a troubleshooting doc, so someone who finds the repo can decide fast and install without getting stuck.
+2. **A stranger's first hour.** Honest cost math, a realistic MCP-conversation example in the README, and a troubleshooting doc, so someone who finds the repo can decide fast and install without getting stuck.
 
 ## Queued behind that
 
@@ -18,7 +18,7 @@ What s33k is focused on, what is queued behind it, and what it deliberately will
 
 - **Multi-tenant accounts, signup, or billing.** s33k is single-user and self-hosted on purpose. That constraint is what keeps the security model simple and the data yours.
 - **Server-side LLM calls.** The AI features stay rules-based and your own LLM does the narration. This is a verified trust property (see `SECURITY.md`), not a temporary gap.
-- **A bigger dashboard.** The MCP surface is the product. The web UI stays a thin companion for setup and glancing, not a destination.
+- **A dashboard, period.** The MCP surface is the product, so the web UI was deleted outright: the only browser surface left is the one-time, token-gated setup page, and everything else is conversation with your own LLM.
 
 ## Good first issues
 

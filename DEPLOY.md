@@ -16,18 +16,15 @@ Run these locally and keep the output. You paste them into your environment.
 
 ```bash
 # APIKEY: the Bearer token the REST API and the MCP server authenticate with.
+# This is the ONLY credential s33k has (there is no web login).
 openssl rand -hex 24
 
-# SECRET: encrypts stored keys (Serper, SMTP, GSC) and signs your login session.
+# SECRET: encrypts stored keys (Serper, SMTP, GSC) and signs the one-time
+# setup and key-drop tokens.
 openssl rand -hex 34
-
-# PASSWORD: your admin login password. Use a password-manager value, or:
-openssl rand -base64 24
 ```
 
-Pick a `USER_NAME` too (the login username, e.g. `admin`). The username is not the secret, the password is.
-
-s33k refuses to boot in production if `APIKEY`, `SECRET`, or `PASSWORD` are unset, left as a `REGENERATE_ME...` placeholder, or set to the public SerpBear demo values. You cannot accidentally ship the demo credentials.
+s33k refuses to boot in production if `APIKEY` or `SECRET` are unset, left as a `REGENERATE_ME...` placeholder, or set to the public SerpBear demo values. You cannot accidentally ship the demo credentials.
 
 ---
 
@@ -43,11 +40,8 @@ The minimum you must set:
 
 ```bash
 # --- Auth (REQUIRED) ---------------------------------------------------------
-USER_NAME=admin
-PASSWORD=your-strong-password
 SECRET=your-openssl-rand-hex-34
 APIKEY=your-openssl-rand-hex-24
-SESSION_DURATION=24
 
 # --- Public URL (REQUIRED) ---------------------------------------------------
 # The URL you reach s33k at, with the scheme and no trailing slash.
@@ -68,15 +62,16 @@ Notes:
 
 - `NODE_ENV=production` is baked into the container image; you do not set it.
 - If `DATABASE_URL` is set, s33k uses Postgres. If it is unset, s33k uses a SQLite file at `DATABASE_PATH` (default `./data/database.sqlite`). Pick one.
-- The Serper key can also be pasted in the Settings UI, where it is stored encrypted in the database. A UI-entered key always wins over the env value. `SCAPING_API` is accepted as an alias for `SERPER_API_KEY`.
+- The Serper key can also be pasted on the one-time setup page (the `[SETUP]` link in the boot logs) or handed over later via the LLM-minted key-drop command; either way it is stored encrypted in the database, and a stored key always wins over the env value. `SCAPING_API` is accepted as an alias for `SERPER_API_KEY`.
 - Analytics is first-party. There is no external analytics service to configure. The `public/s33k.js` beacon posts page events to your own `/api/collect` endpoint and s33k computes everything from its own `s33k_event` table.
 
 Optional blocks (all safe to leave blank):
 
 ```bash
 # --- Rank-change email digest (optional) -------------------------------------
-# Off by default. Set NOTIFICATION_INTERVAL to turn it on. SMTP is configured
-# in the Settings UI (server, port, username, password, from address).
+# Off by default. Set NOTIFICATION_INTERVAL to turn it on. SMTP (server, port,
+# username, password, from address) is written with an authed PUT /api/settings
+# call; see TROUBLESHOOTING.md for the exact curl.
 NOTIFICATION_INTERVAL=never
 
 # --- Scrape cadence (optional) -----------------------------------------------
@@ -112,11 +107,11 @@ docker run -d --name s33k \
   s33k
 ```
 
-s33k is now at `http://localhost:3000`. Log in with your `USER_NAME` and `PASSWORD`.
+s33k is now at `http://localhost:3000` (the root URL returns a JSON identity response; there is no web app). Read the one-time `[SETUP]` link from the logs (`docker logs s33k | grep SETUP`), open it once, and you are set up.
 
 ### Option B: Local Node 20 (no Docker)
 
-s33k needs Node 20 (the `jsonwebtoken` dependency crashes on newer Node).
+s33k pins Node 20 (via `.nvmrc`); the toolchain is built and tested on it.
 
 ```bash
 npm ci
@@ -145,7 +140,7 @@ The beacon is cookieless and captures no personal data (see `SECURITY.md`). It p
 
 ## 5. Seed your first domain and keywords
 
-Once s33k is up and you can log in, add data over the REST API with your `APIKEY`.
+Once s33k is up, add data over the REST API with your `APIKEY` (or just ask your LLM to onboard the domain once MCP is connected, step 6).
 
 ```bash
 export S33K_URL="http://localhost:3000"
@@ -214,13 +209,13 @@ claude mcp add s33k \
 
 Restart your LLM client, then try: "Give me the s33k briefing for yourdomain.com."
 
-s33k exposes 72 MCP tools across the three pillars (SEO rank, analytics, AEO/AI-referrals) plus the cross-pillar joins. There is no admin surface and no billing: it is one user, one key.
+s33k exposes 73 MCP tools across the three pillars (SEO rank, analytics, AEO/AI-referrals) plus the cross-pillar joins. There is no admin surface and no billing: it is one user, one key.
 
 ---
 
 ## 7. Day-2 operations
 
-- **Security.** s33k has a single admin login and a single API key, so anyone with the URL sees the login page. If your instance is not meant to be public, put it behind private networking, an IP allowlist, or an auth proxy. At minimum, do not share the URL. Rotate the key periodically: generate a fresh `openssl rand -hex 24`, update `APIKEY`, restart, and update `S33K_API_KEY` in any MCP client config.
+- **Security.** s33k has exactly one credential, the `APIKEY` Bearer key; there is no login page and no session. Anyone without the key gets only the JSON identity response at `/` and 401s everywhere else. If your instance is not meant to be public, put it behind private networking, an IP allowlist, or an auth proxy anyway. Rotate the key periodically: generate a fresh `openssl rand -hex 24`, update `APIKEY`, restart, and update `S33K_API_KEY` in any MCP client config.
 - **Backups.** Your state is the database. With Postgres, take periodic `pg_dump` logical backups (and enable your provider's automated backups). With the SQLite path, back up the `./data` directory. `GET /api/export` (MCP tool `export_data`) also downloads everything s33k holds as one JSON bundle, credentials excluded.
 - **Upgrades.** Pull the latest code, rebuild (`docker build` or `npm run build`), and restart. Migrations run on boot; your database persists across the restart.
 - **Logs.** Watch the container or process logs. A `[SECURITY]` line means a credential is still a demo or placeholder value and the boot was refused.

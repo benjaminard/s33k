@@ -1,18 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import jwt from 'jsonwebtoken';
 
-// Mock the sequelize-typescript model modules so importing the resolver does NOT pull in
+// Mock the sequelize-typescript model module so importing the resolver does NOT pull in
 // the real sequelize ESM chain (which jest cannot transform here) and never opens a DB
-// connection. The legacy-key, cookie-session, and MULTI_TENANT-off branches under test
-// never call these model methods, so the stubs are never invoked; they exist only to
-// keep this a pure, network-free, DB-free unit test. findOne throws so that if the code
-// ever fell through to the DB path in these tests, the test would fail loudly instead of
-// silently hitting a real model.
+// connection. The Bearer-key branches under test never call these model methods; the stub
+// exists only to keep this a pure, network-free, DB-free unit test. findOne throws so that
+// if the code ever fell through to a DB path in these tests, the test would fail loudly
+// instead of silently hitting a real model.
 jest.mock('../../database/models/account', () => ({
-   __esModule: true,
-   default: { findOne: jest.fn(async () => { throw new Error('DB should not be hit in pure resolver tests'); }) },
-}));
-jest.mock('../../database/models/apiKey', () => ({
    __esModule: true,
    default: { findOne: jest.fn(async () => { throw new Error('DB should not be hit in pure resolver tests'); }) },
 }));
@@ -25,11 +19,13 @@ import { ADMIN_ACCOUNT_ID } from '../../utils/scope';
 /**
  * Pure unit tests for the single-user accounts resolver (utils/resolveAccount.ts).
  *
- * The resolver turns a Bearer key (or cookie session) into the single admin account. Single-user:
- * there is exactly one account (the admin sentinel, ID = ADMIN_ACCOUNT_ID). The invariants:
+ * The resolver turns the APIKEY Bearer key into the single admin account. Single-user AND
+ * headless: there is exactly one account (the admin sentinel, ID = ADMIN_ACCOUNT_ID) and exactly
+ * one credential. The invariants:
  *   1. The global process.env.APIKEY resolves to the admin account.
- *   2. A valid cookie session resolves to the admin account.
- *   3. Anything else (wrong key, no key) is unauthorized.
+ *   2. Anything else (wrong key, no key) is unauthorized.
+ *   3. A session cookie no longer authorizes anything: the cookie/JWT branch was deleted with the
+ *      web UI in the headless phase, and this suite locks that in.
  *
  * No network, no DB. The resolver returns an in-memory admin sentinel and never calls a model
  * method, so these paths are fully pure.
@@ -47,7 +43,7 @@ const makeReq = (opts: { bearer?: string, cookie?: string } = {}): NextApiReques
    return { headers } as unknown as NextApiRequest;
 };
 
-// The `cookies` library reads/writes via res; a no-op res with the needed surface is enough.
+// A no-op res with the surface older middleware expected is enough.
 const makeRes = (): NextApiResponse => ({
    getHeader: () => undefined,
    setHeader: () => undefined,
@@ -65,11 +61,12 @@ describe('resolveAccount', () => {
    });
 
    describe('the global APIKEY resolves to the admin account', () => {
-      it('resolves the API key to the admin account', async () => {
+      it('resolves the API key to the admin account, via bearer', async () => {
          const result = await resolveAccount(makeReq({ bearer: LEGACY_KEY }), makeRes());
          expect(result.authorized).toBe(true);
          expect(result.account).not.toBeNull();
          expect(result.account!.ID).toBe(ADMIN_ACCOUNT_ID);
+         expect(result.via).toBe('bearer');
          expect(result.error).toBeUndefined();
       });
 
@@ -82,18 +79,18 @@ describe('resolveAccount', () => {
       });
    });
 
-   describe('cookie session resolves to the admin account', () => {
-      it('resolves a valid JWT cookie to the admin account', async () => {
-         const token = jwt.sign({ user: 'admin' }, process.env.SECRET as string);
-         const result = await resolveAccount(makeReq({ cookie: token }), makeRes());
-         expect(result.authorized).toBe(true);
-         expect(result.account!.ID).toBe(ADMIN_ACCOUNT_ID);
-      });
-
-      it('does not authorize an invalid JWT cookie', async () => {
-         const result = await resolveAccount(makeReq({ cookie: 'not-a-real-jwt' }), makeRes());
+   describe('cookies no longer authorize (the web UI and its session are deleted)', () => {
+      it('ignores a session cookie entirely: no bearer means Not authorized', async () => {
+         const result = await resolveAccount(makeReq({ cookie: 'any-old-jwt-shaped-value' }), makeRes());
          expect(result.authorized).toBe(false);
          expect(result.account).toBeNull();
+         expect(result.error).toBe('Not authorized');
+      });
+
+      it('a cookie does not rescue a wrong Bearer key', async () => {
+         const result = await resolveAccount(makeReq({ bearer: 'wrong-key', cookie: 'whatever' }), makeRes());
+         expect(result.authorized).toBe(false);
+         expect(result.error).toBe('Invalid API Key Provided.');
       });
    });
 
@@ -110,6 +107,25 @@ describe('resolveAccount', () => {
          expect(result.authorized).toBe(false);
          expect(result.account).toBeNull();
          expect(result.error).toBe('Not authorized');
+      });
+
+      it('a published demo APIKEY authorizes nobody in production, even when presented correctly', async () => {
+         // The deleted login route carried the runtime demo-credential guard; this is its
+         // replacement at the Bearer seam. A direct `node server.js` boot bypasses
+         // entrypoint.sh's boot refusal, so the seam itself must reject published keys.
+         const demoKey = '5saedXklbslhnapihe2pihp3pih4fdnakhjwq5';
+         process.env.APIKEY = demoKey;
+         (process.env as Record<string, string>).NODE_ENV = 'production';
+         const result = await resolveAccount(makeReq({ bearer: demoKey }), makeRes());
+         expect(result.authorized).toBe(false);
+      });
+
+      it('the same demo APIKEY still works outside production (local dev keeps its defaults)', async () => {
+         const demoKey = '5saedXklbslhnapihe2pihp3pih4fdnakhjwq5';
+         process.env.APIKEY = demoKey;
+         (process.env as Record<string, string>).NODE_ENV = 'development';
+         const result = await resolveAccount(makeReq({ bearer: demoKey }), makeRes());
+         expect(result.authorized).toBe(true);
       });
    });
 });

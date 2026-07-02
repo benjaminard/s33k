@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## 4.0.0 (2026-07-02)
+
+### BREAKING CHANGES: the web UI is deleted; s33k is headless
+
+The product is the MCP surface. The dashboard was never it, so it is gone, not hidden.
+
+**Removed:**
+
+- Every UI page (`/`, `/login`, `/domains`, `/domain/*`), all React components, hooks, styles, and UI service layers.
+- The login/logout routes and the whole cookie/JWT session mechanism. The single `APIKEY` Bearer key is now the only credential.
+- The `USER_NAME`, `PASSWORD`, and `SESSION_DURATION` environment variables (and the `LOGIN_RATE_LIMIT` knobs). They are ignored if still set; you can delete them.
+- UI-only dependencies (react-query, chart.js, tailwind, and friends), the PWA/icon assets, and the README screenshots.
+
+**What still serves:** every `/api/*` route (including the hosted MCP endpoint at `/api/mcp`), the `/s33k.js` analytics beacon, the Google Search Console OAuth callback, and the one-time token-gated `/setup` installer page.
+
+**Migration for existing installs:** nothing to do. Your instance keeps working untouched: the database, keywords, events, settings, API key, and MCP connections are all unchanged. Old UI URLs (including `/`) now return a small JSON identity response instead of a page. Settings changes go via env vars, an authed `PUT /api/settings` call (see `TROUBLESHOOTING.md`), or the LLM-minted key-drop flow. The login env vars can be deleted from your deployment.
+
 ## [3.1.0](https://github.com/towfiqi/serpbear/compare/v3.0.0...v3.1.0) (2026-03-27)
 
 

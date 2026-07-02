@@ -1,4 +1,5 @@
 {
+  "root": true,
   "extends": ["next/core-web-vitals", "airbnb-base"],
   "rules":{
    "linebreak-style": 0,

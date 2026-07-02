@@ -9,7 +9,7 @@
 #   5. mcp smoke       (idempotent end-to-end MCP tool check; skipped if env is missing)
 #
 # Usage: ./verify.sh   (from the repo root). Exit code 0 only if every gate passes.
-# Node 20 is required (jsonwebtoken crashes on Node 25); we select it via nvm when present.
+# Node 20 is the pinned toolchain (see .nvmrc); we select it via nvm when present.
 set -euo pipefail
 
 if [ -s "$HOME/.nvm/nvm.sh" ]; then

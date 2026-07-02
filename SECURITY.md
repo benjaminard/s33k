@@ -32,11 +32,16 @@ The distinction that matters: this is not "we don't train today." It is "we have
 
 ## 2. Single-user by design
 
-s33k is one user and one instance. There are no other accounts, no signup, no invites, no shared tenancy: you own the whole deployment, so there is no cross-account boundary to breach. Access is a single admin login plus a single API key (the `APIKEY`), which is the same key the MCP server authenticates with. Anyone with the URL and that key can act as you, so protect them accordingly (see section 6).
+s33k is one user and one instance, and it is headless. There are no other accounts, no signup, no invites, no shared tenancy: you own the whole deployment, so there is no cross-account boundary to breach. Access is a single API key (the `APIKEY` Bearer key), which is the same key the MCP server authenticates with. There is no web login, no username/password, no session cookie, and no login surface to brute-force: the key is the entire auth story. Anyone with the URL and that key can act as you, so protect it accordingly (see section 6).
+
+The two deliberate exceptions to key-auth are both one-shot, signed, and write-only:
+
+- **The setup page** (`/setup`) exists for exactly one boot. It is gated by a one-time token printed only to the server log, verified with a constant-time compare, and returns a hintless 404 once setup completes (or on any wrong token). It accepts configuration; it never reads secrets back out.
+- **Key-drop** (`/api/key-drop/[nonce]`) lets you hand a secret (like a Serper key) to your own server from your own terminal, so it never passes through an LLM chat. Each link is an HMAC-signed, single-use nonce with a 15-minute TTL, rate limited per IP, and hintless-404s on anything invalid.
 
 Because there is only one owner, all of your data belongs to you and s33k reads it freely to do its job (compute rank trends, sessions, and cross-pillar joins). The strongest guarantee here is the deployment model itself: you host it, so the data is yours end to end.
 
-Where to verify: `utils/resolveAccount.ts` and `utils/authorize.ts` (the single-admin resolution and the API-route guard), and the fact that there is no signup, invite, or account-management route in `pages/api/`.
+Where to verify: `utils/resolveAccount.ts`, `utils/verifyUser.ts`, and `utils/authorize.ts` (the Bearer-only resolution and the API-route guard), `utils/setupState.ts` and `pages/api/setup.ts` (the one-time setup token), `utils/keyDrop.ts` and `pages/api/key-drop/` (the signed single-use drop), and the fact that there is no login, signup, invite, or account-management route in `pages/api/`.
 
 ---
 
@@ -113,7 +118,8 @@ No data is sent to any LLM provider as a sub-processor, because s33k makes no LL
 | Guarantee | Proven by |
 |---|---|
 | No model training / no LLM call | `pages/api/briefing.ts`, `insights.ts`, `ai-visibility.ts` trust markers; `mcp/src/index.ts` tool descriptions |
-| Single-user, single-key access | `utils/resolveAccount.ts`, `utils/authorize.ts`, the absence of any signup/invite/account route |
+| Single-user, single-key, no-login access | `utils/resolveAccount.ts`, `utils/verifyUser.ts`, `utils/authorize.ts`, the absence of any login/signup/invite/account route |
+| One-time setup page, signed key-drop | `utils/setupState.ts`, `pages/api/setup.ts`, `utils/keyDrop.ts`, `pages/api/key-drop/` |
 | Encryption at rest (connected credentials) | `pages/api/domains.ts`, `pages/api/settings.ts`, `utils/searchConsole.ts`, `utils/adwords.ts` |
 | Data export | `pages/api/export.ts`, MCP `export_data` |
 | Cookieless / no-PII tracking | `public/s33k.js`, `pages/api/collect.ts`, `utils/event-sanitize.ts` |

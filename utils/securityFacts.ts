@@ -49,18 +49,19 @@ export const securityFacts: SecurityFacts = {
       {
          id: 'single_user',
          question: 'Who else can see my data?',
-         answer: 'Only you. s33k is a single-user tool: there are no other accounts, no signup, and '
-            + 'no invites, so there is no cross-account boundary to breach. You own the whole '
-            + 'deployment, so all of the data is yours and s33k reads it freely to do its job '
-            + '(compute rank trends, sessions, and cross-pillar joins). Access is a single admin '
-            + 'login plus a single API key (the APIKEY, which the MCP server also uses), so anyone '
-            + 'with the URL and that key can act as you: protect them accordingly. The strongest '
-            + 'guarantee is the deployment model itself, because you host it, the data is yours end '
-            + 'to end.',
+         answer: 'Only you. s33k is a single-user, headless tool: there are no other accounts, no '
+            + 'signup, no invites, and no web login, so there is no cross-account boundary to breach '
+            + 'and no login surface to attack. You own the whole deployment, so all of the data is '
+            + 'yours and s33k reads it freely to do its job (compute rank trends, sessions, and '
+            + 'cross-pillar joins). Access is a single API key (the APIKEY, which the MCP server '
+            + 'also uses), so anyone with the URL and that key can act as you: protect it '
+            + 'accordingly. The strongest guarantee is the deployment model itself, because you host '
+            + 'it, the data is yours end to end.',
          verifyIn: [
             'utils/resolveAccount.ts',
+            'utils/verifyUser.ts',
             'utils/authorize.ts',
-            'the absence of any signup, invite, or account-management route in pages/api/',
+            'the absence of any login, signup, invite, or account-management route in pages/api/',
          ],
       },
       {
