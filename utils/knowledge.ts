@@ -160,7 +160,8 @@ const capabilities: CapabilityEntry[] = [
       toolName: 'add_keyword',
       category: 'seo',
       title: 'Add keyword',
-      description: 'Adds one keyword to track for a domain and queues a background Google SERP scrape so its rank appears shortly.',
+      description: 'Adds one keyword to track for a domain and queues a background Google SERP scrape so its rank appears shortly. The response '
+         + 'echoes the created keyword (including its stored target_page) compactly: serpTop plus serpResultCount, never a raw SERP array.',
       whenToUse: 'Use to start tracking a term; pass target_page so it joins to a page in the scoreboard. Call once per keyword to add several.',
       examplePrompt: 'Track the keyword "project management software" for example.com, target page /software.',
    },
@@ -169,7 +170,8 @@ const capabilities: CapabilityEntry[] = [
       toolName: 'update_keyword',
       category: 'seo',
       title: 'Update keyword',
-      description: 'Updates tracked keywords by ID: set the target_page that should rank for them, or toggle the sticky pin.',
+      description: 'Updates tracked keywords by ID: set the target_page that should rank for them, or toggle the sticky pin. The response returns '
+         + 'each updated keyword compactly: serpTop (top 3 ranked results) plus serpResultCount instead of the raw 100-position SERP array.',
       whenToUse: 'Use to fix a keyword\'s target page so it joins correctly in page_scoreboard. Get IDs from list_keywords first.',
       examplePrompt: 'Set the target page for keyword 42 to /software/mcp.',
    },
@@ -196,11 +198,15 @@ const capabilities: CapabilityEntry[] = [
       toolName: 'get_insight',
       category: 'seo',
       title: 'Get Search Console insight',
-      description: 'Reads Google Search Console insight for a domain: top pages, top keywords, top countries, and aggregate stats. Once Search Console '
+      description: 'Reads Google Search Console insight for a domain, summary-first and bounded by default: aggregate stats (clicks, impressions, '
+         + 'ctr, position, window), the top 25 keywords by clicks, 15 untapped keywords (low-click rows ranked by impressions), the top 15 pages, '
+         + 'the top 10 countries, and a compact daily series, plus a meta block with full totals, a truncated flag, and a hint. Pass limit '
+         + '(clamped 1..200) to widen the keyword/page lists, or detail=true for the full unbounded arrays. Once Search Console '
          + 'is connected, this returns the real queries each page actually ranks for, the authoritative answer to "what am I ranking for". '
          + 'The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends a service-account JSON from the '
          + 'user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
-      whenToUse: 'Use for real impression and click data from Google, beyond the keywords you explicitly track. Requires Search Console connected.',
+      whenToUse: 'Use for real impression and click data from Google, beyond the keywords you explicitly track. Requires Search Console connected. '
+         + 'The bounded default fits an LLM context window; reach for limit or detail=true only when the summary is not enough.',
       examplePrompt: 'What are my top Search Console pages for example.com?',
    },
    {
