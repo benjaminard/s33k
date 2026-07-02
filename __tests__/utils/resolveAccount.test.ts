@@ -108,5 +108,24 @@ describe('resolveAccount', () => {
          expect(result.account).toBeNull();
          expect(result.error).toBe('Not authorized');
       });
+
+      it('a published demo APIKEY authorizes nobody in production, even when presented correctly', async () => {
+         // The deleted login route carried the runtime demo-credential guard; this is its
+         // replacement at the Bearer seam. A direct `node server.js` boot bypasses
+         // entrypoint.sh's boot refusal, so the seam itself must reject published keys.
+         const demoKey = '5saedXklbslhnapihe2pihp3pih4fdnakhjwq5';
+         process.env.APIKEY = demoKey;
+         (process.env as Record<string, string>).NODE_ENV = 'production';
+         const result = await resolveAccount(makeReq({ bearer: demoKey }), makeRes());
+         expect(result.authorized).toBe(false);
+      });
+
+      it('the same demo APIKEY still works outside production (local dev keeps its defaults)', async () => {
+         const demoKey = '5saedXklbslhnapihe2pihp3pih4fdnakhjwq5';
+         process.env.APIKEY = demoKey;
+         (process.env as Record<string, string>).NODE_ENV = 'development';
+         const result = await resolveAccount(makeReq({ bearer: demoKey }), makeRes());
+         expect(result.authorized).toBe(true);
+      });
    });
 });

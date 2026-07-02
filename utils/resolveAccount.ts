@@ -28,13 +28,27 @@ export type ResolvedAccount = {
 // the scoping helpers only care about the ID.
 const adminAccount = (): Account => ({ ID: ADMIN_ACCOUNT_ID } as Account);
 
+// The publicly-known demo/example APIKEY values (shipped in the upstream SerpBear demo and this
+// repo's .env.example). entrypoint.sh refuses to BOOT production with them, but a direct
+// `node server.js` start bypasses entrypoint, and the deleted login route used to carry the
+// runtime half of this guard. Rejecting them here restores runtime enforcement at the one auth
+// seam every caller passes through: a production instance whose APIKEY is a published value must
+// authorize nobody, because everybody on the internet holds that credential.
+const PUBLISHED_APIKEYS = [
+   '5saedXklbslhnapihe2pihp3pih4fdnakhjwq5',
+   'replace-with-openssl-rand-hex-24',
+];
+const apikeyIsPublished = (): boolean => process.env.NODE_ENV === 'production'
+   && PUBLISHED_APIKEYS.includes(process.env.APIKEY || '');
+
 // eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
 const resolveAccount = async (req: NextApiRequest, res: NextApiResponse): Promise<ResolvedAccount> => {
    const authHeader = req.headers.authorization;
    const bearer = authHeader ? authHeader.substring('Bearer '.length) : '';
 
-   // The single API key (process.env.APIKEY) resolves to the admin account.
-   if (bearer && bearer === process.env.APIKEY) {
+   // The single API key (process.env.APIKEY) resolves to the admin account, unless the instance
+   // is running production with a published demo/example key, which authorizes nobody.
+   if (bearer && bearer === process.env.APIKEY && !apikeyIsPublished()) {
       return { authorized: true, account: adminAccount(), role: 'admin', via: 'bearer' };
    }
 
