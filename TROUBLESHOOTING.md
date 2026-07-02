@@ -58,6 +58,18 @@ curl -s -X PUT http://localhost:3000/api/settings \
 
 The Serper key specifically has a nicer path: ask your LLM to mint a key-drop link (the `mint_key_drop` flow) and paste the key in your own terminal, so it never enters the chat.
 
+## Connecting Google Search Console gets stuck
+
+The full walkthrough is in the README's "Connect Google Search Console" section. The traps people actually hit, and the fix for each:
+
+- **"I only see an organization, not a project."** A service account cannot live at the org level. Pick the organization, then create a project inside it. Any name works; it is just a container.
+- **The credential screen offers to make an "API key."** Back out. That is a different Google credential and s33k will reject it. You want a service account's **JSON key file**: Credentials > Service Accounts > your account > Keys tab > Add Key > Create new key > JSON.
+- **The `curl` says "operation not permitted" or "no matches found" on macOS.** macOS blocks Terminal from reading `~/Downloads` by default, which also makes shell globs like `*.json` match nothing there. Move the JSON to your home folder (`~`) and run the command from there, or let a shell-capable assistant (for example Claude Code) run it for you.
+- **The drop command says the file was not found.** The `@filename` in the command must match the file's real name. Finder hides extensions, so a file shown as `service-account.json` may really be `service-account.json.txt`; run `ls -la` to see the true name, or rename the file to exactly `service-account.json`.
+- **The drop link "expired."** File drop links last 60 minutes. If the Google steps took longer, ask your LLM to mint a fresh one.
+- **`get_insight` still says "not connected" after the drop.** The drop only stores the credential; Google authorizes nothing until you add the service account's email as a **Full** user on your property at [search.google.com/search-console](https://search.google.com/search-console) (Settings > Users and permissions). Do that, then retry `get_insight`.
+- **`get_insight` errors with a permission or property message.** The email must be granted on the exact property s33k tracks (for example the `www.` host vs the bare domain), and Search Console data lags 2 to 3 days, so a brand-new property may have little to return yet.
+
 ## Where to ask
 
 Open a [GitHub issue](https://github.com/benjaminard/s33k/issues) with the log lines around the failure. Your own LLM can also answer product questions directly from the `help` tool and the `knowledge://troubleshooting` resource once MCP is connected.
