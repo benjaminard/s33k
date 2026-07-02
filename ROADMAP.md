@@ -9,10 +9,14 @@ What s33k is focused on, what is queued behind it, and what it deliberately will
 
 ## Queued behind that
 
+The concrete queue lives on the [issue tracker](https://github.com/benjaminard/s33k/issues); each item there is written to be picked up cold. Highlights:
+
+- **A browser upload page for file-shaped secrets** ([#16](https://github.com/benjaminard/s33k/issues/16)). The key-drop curl is right for pasted keys and rough for files; a one-time token-gated page with a file picker (the `/setup` pattern) collapses the terminal friction into one click.
+- **Honest rank alerts under sparse scrape history** ([#17](https://github.com/benjaminard/s33k/issues/17)). Distinguish newly-ranked from newly-scraped, and always alert on a drop off the top 100.
+- **Batch keyword add** ([#18](https://github.com/benjaminard/s33k/issues/18)) and **context-aware alert recommendations** ([#19](https://github.com/benjaminard/s33k/issues/19)), both labeled good first issue, alongside [#20](https://github.com/benjaminard/s33k/issues/20), [#21](https://github.com/benjaminard/s33k/issues/21), and [#22](https://github.com/benjaminard/s33k/issues/22).
 - **Backlinks, the cheap way.** A monthly referring-domains count per domain built from the Common Crawl domain-level web graph (a fixed-cost index, no crawler, no per-user spend), with honest labeling about Common Crawl's partial coverage. Page-level detail is out of scope until the count proves useful.
-- **Alerts since a timestamp.** An `alerts` parameter so your LLM can poll "what changed since yesterday" cheaply, which makes proactive notification workflows possible without email setup.
-- **A clean migration baseline.** The migration chain still carries tables from a retired multi-tenant era; a fresh install should create only the schema s33k actually uses.
-- **Retention tooling.** Events are kept forever today. A documented retention policy and an optional cleanup command.
+
+Shipped from the previous queue (July 2026): `alerts?since=` polling, the clean single-user migration baseline, and the documented retention policy (see `BACKUP.md`).
 
 ## Not planned
 
