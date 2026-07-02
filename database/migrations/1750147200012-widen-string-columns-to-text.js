@@ -57,7 +57,10 @@ const COLUMNS_TO_WIDEN = [
    ['s33k_event', 'page'],
    ['s33k_event', 'label'],
    ['s33k_event', 'selector'],
-   ['waitlist', 'note'],
+   // Single-user squash (2026-07): the ['waitlist', 'note'] entry was removed. No migration creates
+   // the retired SaaS tables anymore, so on a fresh install the entry could only ever be skipped by
+   // the safeDescribeTable guard below; on an existing install this migration already ran (its
+   // SequelizeMeta row exists) and never re-runs, so nothing changes there.
 ];
 
 // Describe a table, returning null instead of throwing when the table does not exist (fresh DB).

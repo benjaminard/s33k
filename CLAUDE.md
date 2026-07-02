@@ -61,6 +61,23 @@ open-source repo, not an internal ops doc.
 ### Node + container
 - Node 20 via nvm locally (see above). The Dockerfile uses `node:22-alpine`, which is fine.
 
+### Migration chain squashed to the live schema; existing installs keep their dead tables
+- The multi-tenant SaaS migrations (create/alter of `account`, `api_key`, `invite`, `waitlist`,
+  `feature_request`, `audit_log`, `rate_limit`) were DELETED in the single-user squash (2026-07),
+  so a fresh install creates only the live schema. The `domain` and `keyword` base tables still
+  come from the on-boot `connection.sync()` (database/database.ts), not from a migration; the
+  add-column migrations that touch them no-op on a fresh DB via their describeTable probe and the
+  columns arrive with the sync. That was true before the squash too.
+- Deleting a migration FILE is safe for existing installs: sequelize-cli/Umzug ignore SequelizeMeta
+  rows that have no matching file. But NEVER ship a migration that assumes a deleted one ran: any
+  remaining migration must keep its safeDescribeTable / column-presence / indexExists skip guards
+  (the 016/030 pattern) for everything it touches.
+- NEVER emit DROP TABLE (or any destructive SQL) against the dead tables. An install that predates
+  the squash keeps them, and its meta rows keep the deleted names; both are harmless. If an
+  operator wants them gone, that is a MANUAL, documented cleanup on their own DB
+  (`DROP TABLE account, api_key, invite, waitlist, feature_request, audit_log, rate_limit`),
+  never a migration, because migrations run unattended on every boot.
+
 ---
 
 ## B. Code patterns the next session must follow
