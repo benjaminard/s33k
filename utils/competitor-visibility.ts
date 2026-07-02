@@ -60,7 +60,42 @@ export type CompetitorVisibility = {
    outrankedKeywords: OutrankedKeyword[],
 };
 
-type SerpItem = { position: number, url: string, title?: string, skipped?: boolean };
+export type SerpItem = { position: number, url: string, title?: string, skipped?: boolean };
+
+/**
+ * The external domains sitting immediately ABOVE a given position on a stored SERP,
+ * nearest first. Used to enrich rank alerts with "who is directly above you now"
+ * from data s33k already stores (no new scrape). Each host appears once, at its
+ * best (closest-above) position; the tracked domain itself is excluded.
+ * @param {SerpItem[]} serp - the keyword's stored SERP page (lastResult, parsed).
+ * @param {number} position - the tracked domain's position on that SERP (1 = top).
+ * @param {string} trackedDomain - the domain being analyzed, excluded from results.
+ * @param {number} max - max hosts returned (default 3: "immediately above", not the whole SERP).
+ * @returns {string[]} bare hostnames ordered nearest-above first, e.g. ["a.com", "b.com"].
+ */
+export const domainsAboveOnSerp = (
+   serp: SerpItem[],
+   position: number,
+   trackedDomain: string,
+   max: number = 3,
+): string[] => {
+   if (!Array.isArray(serp) || !Number.isFinite(position) || position <= 1) { return []; }
+   const trackedHost = normalizeHost(trackedDomain);
+   // Each host once, at its best (lowest-number) position above the user.
+   const bestByHost = new Map<string, number>();
+   serp.forEach((item) => {
+      if (!item || item.skipped || !item.url || !(item.position > 0) || item.position >= position) { return; }
+      const host = hostFromUrl(item.url);
+      if (!host || host === trackedHost) { return; }
+      const prev = bestByHost.get(host);
+      if (prev === undefined || item.position < prev) { bestByHost.set(host, item.position); }
+   });
+   // Nearest above first = highest position number first (position user-1, then user-2, ...).
+   return Array.from(bestByHost.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, max)
+      .map(([host]) => host);
+};
 
 type KeywordLike = {
    keyword: string,

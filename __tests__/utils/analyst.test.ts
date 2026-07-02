@@ -462,3 +462,168 @@ describe('detectChanges: prioritization order', () => {
       expect(out.topPriority).toBe(`${top.headline} ${top.recommendation}`);
    });
 });
+
+describe('detectChanges: CONTENT-DECAY pillar', () => {
+   /** A per-page traffic entry for the decay detector. */
+   const pg = (page: string, pageviews: number) => ({ page, pageviews });
+
+   it('flags a sustained per-page traffic decline off a real prior baseline', () => {
+      const { current, prior } = pair(
+         { pages: [pg('/blog/old-post', 30)] }, // -50% -> high
+         { pages: [pg('/blog/old-post', 60)] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].severity).toBe('high');
+      expect(decay[0].headline).toMatch(/\/blog\/old-post/);
+      expect(decay[0].headline).toMatch(/50%/);
+      expect(decay[0].recommendation).toMatch(/refresh this content/i);
+   });
+
+   it('flags MEDIUM for a >= 35% but < 50% decline', () => {
+      const { current, prior } = pair(
+         { pages: [pg('/guide', 60)] }, // -40%
+         { pages: [pg('/guide', 100)] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].severity).toBe('medium');
+   });
+
+   it('calls out the STALE-CONTENT variant when a tracked keyword rank HELD on the decaying page', () => {
+      // Traffic to /guide fell 60% while "content dam" held #5 -> flat rank + falling
+      // traffic = stale content, the highest-value variant.
+      const { current, prior } = pair(
+         { pages: [pg('/guide', 20)], keywords: [kw('content dam', 5, '/guide')] },
+         { pages: [pg('/guide', 50)], keywords: [kw('content dam', 5, '/guide')] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].headline).toMatch(/rank held/i);
+      expect(decay[0].detail).toMatch(/"content dam" still ranks #5/);
+      expect(decay[0].detail).toMatch(/stale-content/i);
+      expect(decay[0].recommendation).toMatch(/refresh this content/i);
+      // The rank pillar itself stays quiet (no move), so decay is the only alert.
+      expect(out.alerts.filter((a) => a.pillar === 'rank')).toHaveLength(0);
+   });
+
+   it('does NOT use the stale-content variant when the rank fell comparably', () => {
+      // The keyword dropped 5 -> 30: the rank slide explains the traffic loss, so the
+      // decay alert must NOT claim the rank held (the rank pillar reports the slide).
+      const { current, prior } = pair(
+         { pages: [pg('/guide', 20)], keywords: [kw('content dam', 30, '/guide')] },
+         { pages: [pg('/guide', 50)], keywords: [kw('content dam', 5, '/guide')] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].headline).not.toMatch(/rank held/i);
+   });
+
+   it('stays SILENT below the 20-prior-pageview baseline (tiny pages cannot spam)', () => {
+      const { current, prior } = pair(
+         { pages: [pg('/tiny', 2)] }, // -80%, but off a 10-view baseline
+         { pages: [pg('/tiny', 10)] },
+      );
+      const out = detectChanges(current, prior);
+      expect(out.alerts.filter((a) => a.pillar === 'content_decay')).toHaveLength(0);
+   });
+
+   it('stays SILENT below the 35% decline threshold', () => {
+      const { current, prior } = pair(
+         { pages: [pg('/steady', 70)] }, // -30%
+         { pages: [pg('/steady', 100)] },
+      );
+      const out = detectChanges(current, prior);
+      expect(out.alerts.filter((a) => a.pillar === 'content_decay')).toHaveLength(0);
+   });
+
+   it('stays SILENT when no per-page data is provided (missing pages never fabricate)', () => {
+      const out = detectChanges(quietPeriod(), quietPeriod());
+      expect(out.alerts.filter((a) => a.pillar === 'content_decay')).toHaveLength(0);
+   });
+
+   it('treats a page ABSENT from the current period as fallen to zero', () => {
+      const { current, prior } = pair(
+         { pages: [] },
+         { pages: [pg('/gone', 40)] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].severity).toBe('high');
+      expect(decay[0].headline).toMatch(/100%/);
+   });
+
+   it('caps decay alerts at 5, keeping the biggest declines', () => {
+      const priorPages = Array.from({ length: 8 }, (_, i) => pg(`/p${i}`, 100));
+      // Declines of 40%..96%, in 8% steps: only the 5 biggest survive the cap.
+      const currentPages = Array.from({ length: 8 }, (_, i) => pg(`/p${i}`, 60 - i * 8));
+      const { current, prior } = pair({ pages: currentPages }, { pages: priorPages });
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(5);
+      // The biggest decline (/p7, -96%) leads the decay list.
+      expect(decay[0].headline).toMatch(/\/p7/);
+   });
+
+   it('normalizes page paths and keyword target pages before joining (cleanPath both sides)', () => {
+      // The traffic page carries a trailing slash + query; the keyword target is a full URL.
+      const { current, prior } = pair(
+         { pages: [pg('/Guide/?utm=x', 20)], keywords: [kw('content dam', 5, 'https://example.com/guide')] },
+         { pages: [pg('/guide', 50)], keywords: [kw('content dam', 6, 'https://example.com/guide')] },
+      );
+      const out = detectChanges(current, prior);
+      const decay = out.alerts.filter((a) => a.pillar === 'content_decay');
+      expect(decay).toHaveLength(1);
+      expect(decay[0].headline).toMatch(/rank held/i);
+   });
+});
+
+describe('detectChanges: RANK alert SERP context', () => {
+   it('attaches prior/current positions and domainsAbove to a falling rank alert', () => {
+      const falling = { ...kw('DAM MCP server', 11, '/software/mcp'), serpDomainsAbove: ['bynder.com', 'brandfolder.com'] };
+      const { current, prior } = pair(
+         { keywords: [falling] },
+         { keywords: [kw('DAM MCP server', 4, '/software/mcp')] },
+      );
+      const out = detectChanges(current, prior);
+      const rank = out.alerts.filter((a) => a.pillar === 'rank');
+      expect(rank).toHaveLength(1);
+      expect(rank[0].context).toEqual({
+         keyword: 'DAM MCP server',
+         priorPosition: 4,
+         currentPosition: 11,
+         domainsAbove: ['bynder.com', 'brandfolder.com'],
+      });
+      // The domains are also named in the detail so a narration can explain the move.
+      expect(rank[0].detail).toMatch(/Directly above you now: bynder\.com, brandfolder\.com/);
+   });
+
+   it('attaches context WITHOUT domainsAbove when no SERP data was supplied (additive, honest)', () => {
+      const { current, prior } = pair(
+         { keywords: [kw('AI-ready DAM', 6)] },
+         { keywords: [kw('AI-ready DAM', 18)] },
+      );
+      const out = detectChanges(current, prior);
+      const rank = out.alerts.filter((a) => a.pillar === 'rank');
+      expect(rank).toHaveLength(1);
+      expect(rank[0].context).toEqual({ keyword: 'AI-ready DAM', priorPosition: 18, currentPosition: 6 });
+      expect(rank[0].context!.domainsAbove).toBeUndefined();
+   });
+
+   it('carries context on newly-ranked and dropped-off alerts too (null for the unranked side)', () => {
+      const { current, prior } = pair(
+         { keywords: [kw('new term', 8), kw('lost term', null)] },
+         { keywords: [kw('new term', null), kw('lost term', 7)] },
+      );
+      const out = detectChanges(current, prior);
+      const newly = out.alerts.find((a) => /started ranking/.test(a.headline));
+      const dropped = out.alerts.find((a) => /dropped off/.test(a.headline));
+      expect(newly!.context).toEqual({ keyword: 'new term', priorPosition: null, currentPosition: 8 });
+      expect(dropped!.context).toEqual({ keyword: 'lost term', priorPosition: 7, currentPosition: null });
+   });
+});

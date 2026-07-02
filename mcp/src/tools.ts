@@ -1,7 +1,7 @@
 /**
  * s33k MCP tool + resource registrations (SHARED).
  *
- * This module is the single source of truth for the 82 tools and the knowledge resources the
+ * This module is the single source of truth for the 72 tools and the knowledge resources the
  * s33k MCP server exposes. It is consumed by TWO transports:
  *   1. mcp/src/index.ts        the stdio entry, bound to process.env.S33K_API_KEY (local install).
  *   2. pages/api/mcp/[[...slug]].ts   the hosted Streamable HTTP endpoint, bound PER REQUEST to the
@@ -15,7 +15,7 @@
  * The handler bodies below are byte-for-byte the originals from the stdio server; they reference a
  * local `s33kFetch` (aliased to fetchImpl), `jsonResult`, `errorResult`, and `z`, so the extraction
  * required no per-tool edits. The knowledge-coverage jest guard parses the tool-registration calls
- * out of THIS module (it now reads tools.ts), keeping the 82-tool count and the smoke EXPECTED_TOOLS
+ * out of THIS module (it now reads tools.ts), keeping the 72-tool count and the smoke EXPECTED_TOOLS
  * list in lockstep with what is registered here.
  */
 
@@ -2105,12 +2105,18 @@ server.registerTool(
          + 'length and surfaces the notable shifts as a PRIORITIZED list of plain-English alerts: keyword rank moves of 5+ '
          + 'positions or crossing page one (the highest-signal SEO move), traffic swings of 25%+ (pageviews and visitors), '
          + 'AI referral signals (a brand-NEW engine sending you visitors, or an existing engine that COLLAPSED to near zero, '
-         + 'plus 30%+ moves), and conversion changes by both VOLUME (30%+ change in form submissions) and RATE (conversions '
-         + 'per visitor falling on steady traffic, the leading sign a form or landing page broke). Each alert carries a '
-         + 'severity (high/medium/low), the pillar, a '
-         + 'headline stating exactly what changed, a detail with the numbers, and a concrete recommendation. The response '
+         + 'plus 30%+ moves), CONTENT DECAY (a page whose traffic fell 35%+ off a real prior baseline; when a tracked keyword '
+         + 'still ranks for that page the alert says the rank held, the classic stale-content signal, and recommends '
+         + 'refreshing the content), and conversion changes by both VOLUME (30%+ change in form submissions) and RATE '
+         + '(conversions per visitor falling on steady traffic, the leading sign a form or landing page broke). Each alert '
+         + 'carries a severity (high/medium/low), the pillar, a '
+         + 'headline stating exactly what changed, a detail with the numbers, and a concrete recommendation. RANK alerts '
+         + 'additionally carry a context object (prior vs current position and, when the stored SERP allows it, the domains '
+         + 'immediately above you now) so you can explain a move, not just report it. The response '
          + 'also returns topPriority: the single most important thing to do this week, and a per-pillar dataAvailability note '
-         + 'so you can tell the user honestly when a signal had no baseline to compare. RULES-BASED: the s33k server does NOT '
+         + 'so you can tell the user honestly when a signal had no baseline to compare. Pass since=<ISO timestamp> to scope '
+         + 'the current window to everything after that moment (the cheap "what changed since yesterday" poll); it takes '
+         + 'precedence over period and is echoed back as since. RULES-BASED: the s33k server does NOT '
          + 'call any LLM; it computes the deltas with transparent rules and stays silent on any signal it cannot honestly '
          + 'measure (e.g. no prior traffic baseline) rather than inventing a swing from zero. YOU (the connected LLM) narrate '
          + 'the alerts, leading with topPriority. It never fails on a missing signal: each pillar degrades independently.',
@@ -2120,19 +2126,27 @@ server.registerTool(
             .string()
             .optional()
             .describe('The window to compare against its immediately-prior equivalent, e.g. "7d" (this week vs last week) or '
-               + '"30d" (this month vs last month). Defaults to "7d".'),
+               + '"30d" (this month vs last month). Defaults to "7d". Ignored when since is set.'),
+         since: z
+            .string()
+            .optional()
+            .describe('An ISO 8601 timestamp (e.g. "2026-07-01T00:00:00Z"). Scopes the CURRENT window to [since, now) and '
+               + 'compares it to the equal-length window before it: the cheap "what changed since yesterday" poll. Must be in '
+               + 'the past and within the last 365 days; an invalid value is a clear 400. Takes precedence over period.'),
       },
    },
-   async ({ domain, period }) => {
+   async ({ domain, period, since }) => {
       try {
          const query: Record<string, string> = { domain };
          if (period) { query.period = period; }
+         if (since) { query.since = since; }
          const data = await s33kFetch('/api/alerts', { query });
          return jsonResult({
             alerts: data.alerts,
             topPriority: data.topPriority,
             period: data.period,
             comparedTo: data.comparedTo,
+            since: data.since,
             dataAvailability: data.dataAvailability,
             error: data.error,
          });

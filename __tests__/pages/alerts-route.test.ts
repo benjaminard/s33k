@@ -70,6 +70,7 @@ const keywordRow = (overrides: {
    target_page?: string,
    curPos?: number,
    priorPos?: number,
+   lastResult?: { position: number, url: string, title?: string }[],
 }) => {
    const history: Record<string, number> = {};
    // 7d default period: current window is the last 7 days, prior is days 7-14.
@@ -86,7 +87,7 @@ const keywordRow = (overrides: {
       target_page: overrides.target_page ?? '/',
       history: JSON.stringify(history),
       tags: '[]',
-      lastResult: '[]',
+      lastResult: JSON.stringify(overrides.lastResult ?? []),
       lastUpdateError: 'false',
       sticky: false,
    };
@@ -113,6 +114,7 @@ const makeReqRes = (query: Record<string, string>) => {
 const providerStub = (opts: {
    summaryByPeriod?: Record<string, any>,
    referralByPeriod?: Record<string, { sources: any[], error: string | null }>,
+   pagesByPeriod?: Record<string, { pages: any[], error: string | null }>,
    throwOn?: Set<string>,
 } = {}) => {
    const throwOn = opts.throwOn ?? new Set<string>();
@@ -125,6 +127,10 @@ const providerStub = (opts: {
       getReferralSources: jest.fn(async (_d: string, period: string) => {
          if (throwOn.has('getReferralSources')) { throw new Error('referral backend exploded'); }
          return (opts.referralByPeriod && opts.referralByPeriod[period]) || { sources: [], error: null };
+      }),
+      getPageTraffic: jest.fn(async (_d: string, period: string) => {
+         if (throwOn.has('getPageTraffic')) { throw new Error('page traffic backend exploded'); }
+         return (opts.pagesByPeriod && opts.pagesByPeriod[period]) || { pages: [], error: null };
       }),
    };
 };
@@ -350,5 +356,184 @@ describe('alerts route: graceful degradation (never 500)', () => {
       expect(captured.body.alerts).toEqual([]); // nothing measurable -> no fabricated alerts
       expect(captured.body.topPriority).toBeNull();
       expect(captured.body.dataAvailability).toBeDefined();
+   });
+});
+
+describe('alerts route: the since parameter (poll "what changed since ...")', () => {
+   it('returns a clear 400 for an unparseable since value', async () => {
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since: 'yesterday-ish' });
+      await handler(req, res);
+      expect(captured.status).toBe(400);
+      expect(captured.body.error).toMatch(/since/i);
+      expect(captured.body.error).toMatch(/ISO 8601/);
+   });
+
+   it('returns a clear 400 for a since value in the future', async () => {
+      const future = new Date(Date.now() + 60 * 60 * 1000).toJSON();
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since: future });
+      await handler(req, res);
+      expect(captured.status).toBe(400);
+      expect(captured.body.error).toMatch(/past/i);
+   });
+
+   it('returns a clear 400 for a since value past the 365-day lookback cap', async () => {
+      const ancient = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toJSON();
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since: ancient });
+      await handler(req, res);
+      expect(captured.status).toBe(400);
+      expect(captured.body.error).toMatch(/365/);
+   });
+
+   it('scopes the current window to [since, now), echoes since back, and derives the provider period in hours', async () => {
+      // 23.5 hours ago rounds UP to a 24h provider window (ceil always COVERS the window).
+      const since = new Date(Date.now() - 23.5 * 60 * 60 * 1000).toJSON();
+      const provider = providerStub();
+      mockedGetProvider.mockReturnValue(provider);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.since).toBe(since);
+      expect(captured.body.period).toBe('24h');
+      expect(captured.body.comparedTo).toBe('the prior 24h window');
+      // The provider reads used the derived window and its doubled companion.
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '24h');
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '48h');
+   });
+
+   it('floors a short since window at 24h so provider reads compare equal windows', async () => {
+      // The provider's period grammar floors any window at 1 day (eventPeriodCutoff's
+      // Math.max(1, days)). Without the 24h floor here, since=6h would read a 24h current
+      // window against a differently-sized doubled window and fabricate swings from the
+      // unequal-window subtraction. The floor keeps doubled at exactly 2x and the echoed
+      // period honest about what the provider actually read.
+      const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toJSON();
+      const provider = providerStub();
+      mockedGetProvider.mockReturnValue(provider);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.period).toBe('24h');
+      expect(captured.body.comparedTo).toBe('the prior 24h window');
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '24h');
+      expect(provider.getSummary).toHaveBeenCalledWith('getmasset.com', '48h');
+   });
+
+   it('takes precedence over period when both are supplied', async () => {
+      const since = new Date(Date.now() - 23.5 * 60 * 60 * 1000).toJSON();
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', since, period: '30d' });
+      await handler(req, res);
+      expect(captured.status).toBe(200);
+      expect(captured.body.period).toBe('24h');
+   });
+
+   it('does not include since in the response when it was not supplied', async () => {
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com' });
+      await handler(req, res);
+      expect(captured.status).toBe(200);
+      expect(captured.body.since).toBeUndefined();
+   });
+});
+
+describe('alerts route: content decay', () => {
+   it('flags a decaying page from per-page traffic (prior derived as doubled minus current)', async () => {
+      mockedGetProvider.mockReturnValue(providerStub({
+         pagesByPeriod: {
+            // Current window: 10 views. Doubled window: 60, so prior = 50: an 80% decline
+            // off a >= 20-view baseline -> a high-severity content_decay alert.
+            '7d': { pages: [{ url: '/blog/x', pathClean: '/blog/x', page_views: 10 }], error: null },
+            '14d': { pages: [{ url: '/blog/x', pathClean: '/blog/x', page_views: 60 }], error: null },
+         },
+      }));
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const decay = captured.body.alerts.find((a: any) => a.pillar === 'content_decay');
+      expect(decay).toBeDefined();
+      expect(decay.severity).toBe('high');
+      expect(decay.headline).toMatch(/\/blog\/x/);
+      expect(decay.recommendation).toMatch(/refresh this content/i);
+      expect(captured.body.dataAvailability.content).toMatch(/content decay/i);
+   });
+
+   it('names the flat-rank stale-content variant when a tracked keyword held its rank', async () => {
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({ keyword: 'content dam', target_page: '/blog/x', curPos: 5, priorPos: 5 }),
+      ]);
+      mockedGetProvider.mockReturnValue(providerStub({
+         pagesByPeriod: {
+            '7d': { pages: [{ url: '/blog/x', pathClean: '/blog/x', page_views: 20 }], error: null },
+            '14d': { pages: [{ url: '/blog/x', pathClean: '/blog/x', page_views: 70 }], error: null },
+         },
+      }));
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const decay = captured.body.alerts.find((a: any) => a.pillar === 'content_decay');
+      expect(decay).toBeDefined();
+      expect(decay.headline).toMatch(/rank held/i);
+      expect(decay.detail).toMatch(/"content dam" still ranks #5/);
+   });
+
+   it('degrades only the content pillar (still 200) when getPageTraffic rejects', async () => {
+      mockedGetProvider.mockReturnValue(providerStub({ throwOn: new Set(['getPageTraffic']) }));
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.error).toBeNull();
+      expect(captured.body.alerts.find((a: any) => a.pillar === 'content_decay')).toBeUndefined();
+      expect(captured.body.dataAvailability.content).toMatch(/unavailable/i);
+   });
+});
+
+describe('alerts route: SERP context on rank alerts', () => {
+   it('enriches a rank drop with the domains immediately above, from the stored SERP (no new scrape)', async () => {
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({
+            keyword: 'DAM MCP server',
+            target_page: '/software/mcp',
+            curPos: 11,
+            priorPos: 4,
+            lastResult: [
+               { position: 8, url: 'https://www.bynder.com/dam' },
+               { position: 9, url: 'https://brandfolder.com/mcp' },
+               { position: 10, url: 'https://seismic.com/dam-mcp' },
+               { position: 11, url: 'https://getmasset.com/software/mcp' },
+               { position: 12, url: 'https://paperflite.com/x' },
+            ],
+         }),
+      ]);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const rank = captured.body.alerts.find((a: any) => a.pillar === 'rank');
+      expect(rank).toBeDefined();
+      expect(rank.context).toBeDefined();
+      expect(rank.context.priorPosition).toBe(4);
+      expect(rank.context.currentPosition).toBe(11);
+      // Nearest above first; the user's own domain and lower-ranked results are excluded.
+      expect(rank.context.domainsAbove).toEqual(['seismic.com', 'brandfolder.com', 'bynder.com']);
+   });
+
+   it('still carries prior/current positions in context when the stored SERP is empty', async () => {
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({ keyword: 'masset', target_page: '/', curPos: 12, priorPos: 4 }),
+      ]);
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const rank = captured.body.alerts.find((a: any) => a.pillar === 'rank');
+      expect(rank.context).toEqual({ keyword: 'masset', priorPosition: 4, currentPosition: 12 });
    });
 });

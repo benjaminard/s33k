@@ -25,7 +25,7 @@ The server registers 72 tools and 5 knowledge resources, grouped by pillar. s33k
 |---|---|
 | `briefing` | One proactive daily standup for a domain: a headline, sections, and the top three actions across every pillar. Best first call of the day. |
 | `insights` | Cross-pillar analyst. Joins rank, traffic, AI referrals, and engagement into rules-based findings and prioritized recommendations. |
-| `alerts` | The "what changed and what to do" standup. Compares this period to the prior one and surfaces rank moves, traffic swings, and new AI engines, plus the top priority. |
+| `alerts` | The "what changed and what to do" standup. Compares this period to the prior one and surfaces rank moves (with SERP context: who sits directly above you), traffic swings, content decay (a page losing traffic while its rank held: refresh it), and new AI engines, plus the top priority. Pass `since=<ISO timestamp>` to poll "what changed since yesterday" cheaply. |
 | `executive_summary` | The leadership one-glance report: headline numbers, top and top-converting channel, an SEO snapshot, AI visibility, a health line, and the single next action. |
 | `weekly_digest` | A week-in-review bundle: traffic, top entry pages, sessions per channel, AI-search sessions, and the keywords that moved most in rank. |
 | `page_scoreboard` | Joins per-page traffic with tracked keywords and rank. Flags content-gap pages and keywords whose target page got no traffic. |

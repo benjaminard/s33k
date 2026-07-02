@@ -777,11 +777,16 @@ const capabilities: CapabilityEntry[] = [
       title: 'Proactive alerts: what changed and what to do',
       description: 'Your "what changed and what to do" standup across SEO, AI search, and analytics. Compares the current period to the prior '
          + 'one and surfaces notable shifts as a prioritized list of plain-English alerts: keyword rank moves of 5+ positions or crossing page one, '
-         + 'traffic swings of 25%+, any NEW AI referral engine (a leading AEO signal), and form-submission/conversion shifts of 30%+. '
-         + 'Each alert carries a severity, the headline shift, a detail, and a concrete recommendation; the response also returns the single most '
-         + 'important thing to act on right now. Rules-based: it never calls an LLM, and it stays silent on a signal it cannot honestly measure '
-         + 'rather than inventing a movement.',
-      whenToUse: 'Use to drill into one change signal in full detail. daily_brief gives the prioritized daily summary; this lists every '
+         + 'traffic swings of 25%+, CONTENT DECAY (a page whose traffic fell 35%+ off a real prior baseline, called out explicitly when a tracked '
+         + 'keyword\'s rank HELD, the classic stale-content signal, with a "refresh this content" recommendation), any NEW AI referral engine '
+         + '(a leading AEO signal), and form-submission/conversion shifts of 30%+. '
+         + 'Each alert carries a severity, the headline shift, a detail, and a concrete recommendation; RANK alerts also carry a context object '
+         + 'with the prior vs current position and, when the stored SERP allows it, the domains immediately above you now. The response also '
+         + 'returns the single most important thing to act on right now. Pass since=<ISO timestamp> to scope the current window to everything '
+         + 'after that moment (the cheap "what changed since yesterday" poll; takes precedence over period). Rules-based: it never calls an LLM, '
+         + 'and it stays silent on a signal it cannot honestly measure rather than inventing a movement.',
+      whenToUse: 'Use to drill into one change signal in full detail, or with since to poll cheaply for anything new since your last check. '
+         + 'daily_brief gives the prioritized daily summary; this lists every '
          + 'change since the prior window with the numbers and a concrete next action for each.',
       examplePrompt: 'What moved on my site since the prior period, and what should I do about it?',
    },

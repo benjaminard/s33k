@@ -4,9 +4,10 @@
  * s33k's other cross-pillar surfaces (briefing.ts, insights.ts) answer "what is
  * the state of the site right now?". This engine answers the harder, more useful
  * question: "what CHANGED since last period, and what should I do about it?". It
- * compares a CURRENT period to a PRIOR one across all four pillars (search rank,
- * traffic, AI visibility, engagement/conversions) and emits a prioritized list of
- * plain-English alerts plus the single most important thing to do this week.
+ * compares a CURRENT period to a PRIOR one across the pillars (search rank,
+ * traffic, per-page content decay, AI visibility, engagement/conversions) and
+ * emits a prioritized list of plain-English alerts plus the single most
+ * important thing to do this week.
  *
  * ============================================================================
  * NO LLM. NO IO. NO MODEL TRAINING.
@@ -39,6 +40,10 @@
  * threads a per-period bot estimate into PeriodData.
  */
 
+// cleanPath is a PURE string normalizer (no IO), so importing it keeps this engine pure.
+// It is how a keyword's targetPage and a traffic page path compare apples-to-apples.
+import { cleanPath } from './clean-path';
+
 // --- Public input shape ------------------------------------------------------
 
 /** One tracked keyword's rank in a single period, plus enough context to narrate it. */
@@ -53,6 +58,13 @@ export type KeywordRank = {
    position: number | null,
    /** The page this keyword targets, if mapped, so an alert can name it. Optional. */
    targetPage?: string,
+   /**
+    * Domains sitting immediately above the user's position on the keyword's
+    * already-STORED SERP (nearest first), computed by the route from lastResult.
+    * No new scraping: a local join over data already on disk. Optional; when
+    * absent the rank alert simply carries no domainsAbove context.
+    */
+   serpDomainsAbove?: string[],
 };
 
 /** One referring AI engine in a single period (e.g. "ChatGPT", visitors). */
@@ -67,6 +79,14 @@ export type AiEngineCount = {
 export type TrafficTotals = {
    pageviews: number,
    visitors: number,
+};
+
+/** One page's traffic in a single period, keyed by its normalized (cleanPath) path. */
+export type PageTraffic = {
+   /** The normalized comparable path, e.g. "/blog/some-post". */
+   page: string,
+   /** Pageviews the page earned in the period. */
+   pageviews: number,
 };
 
 /**
@@ -88,12 +108,34 @@ export type PeriodData = {
    aiEngines: AiEngineCount[],
    /** Total form submissions this period (the autocapture conversion proxy). */
    formSubmissions: number,
+   /**
+    * Per-page traffic this period, for content-decay detection. OPTIONAL so
+    * existing callers that do not thread per-page traffic behave byte-for-byte
+    * as before (no pages in either period = the decay detector stays silent).
+    */
+   pages?: PageTraffic[],
 };
 
 // --- Public output shape -----------------------------------------------------
 
 export type AlertSeverity = 'high' | 'medium' | 'low';
-export type AlertPillar = 'rank' | 'traffic' | 'ai' | 'conversions';
+export type AlertPillar = 'rank' | 'traffic' | 'content_decay' | 'ai' | 'conversions';
+
+/**
+ * SERP context attached to RANK alerts, so the narrating LLM can explain a move,
+ * not just report it. Built entirely from the keyword's already-stored SERP page
+ * (no new scrape). domainsAbove is present only when the stored SERP allows it.
+ */
+export type RankAlertContext = {
+   /** The tracked term the alert is about. */
+   keyword: string,
+   /** Position in the prior period, or null when it was not ranked. */
+   priorPosition: number | null,
+   /** Position in the current period, or null when it is not ranked. */
+   currentPosition: number | null,
+   /** Domains immediately above the user's position now, nearest first. Omitted when unknown. */
+   domainsAbove?: string[],
+};
 
 /** One detected change, ready for an LLM to narrate. */
 export type Alert = {
@@ -105,6 +147,12 @@ export type Alert = {
    detail: string,
    /** A concrete next action, not a restatement of the finding. */
    recommendation: string,
+   /**
+    * ADDITIVE, nullable context. Today only RANK alerts carry it (SERP context
+    * from the stored results page); every other pillar omits it. Optional so
+    * existing consumers of the Alert shape are unaffected.
+    */
+   context?: RankAlertContext | null,
 };
 
 export type AnalystOutput = {
@@ -141,6 +189,26 @@ const AI_COLLAPSE_BASELINE_MIN = 5; // visitors
  * Lets a 12->1 fall register as a collapse, not just a >= 30% shrink.
  */
 const AI_COLLAPSE_NEAR_ZERO_MAX = 1; // visitors
+/**
+ * CONTENT DECAY. A page's pageviews must fall by at least this fraction period
+ * over period to count as decaying (sustained decline, not noise).
+ */
+const DECAY_DROP_MIN = 0.35; // 35%
+/** A decay drop at or above this fraction is high-severity (mirrors the traffic 50% rule). */
+const DECAY_DROP_HIGH = 0.5; // 50%
+/**
+ * A page needs at least this many PRIOR pageviews to be judged for decay, so a
+ * 3-view page falling to 1 cannot spam the alert list with statistical noise.
+ */
+const DECAY_BASELINE_MIN = 20; // prior pageviews
+/**
+ * A tracked keyword's rank "held" when it worsened by no more than this many
+ * positions (or improved). Flat rank + falling traffic = stale content, the
+ * highest-value decay variant (the rank did not cause the drop, the page did).
+ */
+const DECAY_RANK_HELD_TOLERANCE = 2; // positions
+/** Cap decay alerts per run so a site-wide traffic event does not drown the list. */
+const DECAY_MAX_ALERTS = 5;
 /** Conversion (form-submission) change of at least this fraction is notable. */
 const CONVERSION_CHANGE_MIN = 0.3; // 30%
 /**
@@ -175,6 +243,35 @@ const isRanked = (position: number | null): position is number => (
 );
 
 // --- Per-pillar detectors (each pure, each returns Alert[]) -------------------
+
+/**
+ * The SERP context every rank alert carries: prior vs current position plus,
+ * when the route supplied it from the stored SERP, the domains immediately
+ * above the user's position now. Pure; a missing serpDomainsAbove just omits
+ * the field rather than inventing one.
+ * @param {KeywordRank} now - The current-period keyword (carries serpDomainsAbove).
+ * @param {number | null} nowPos - The ranked current position, or null.
+ * @param {number | null} beforePos - The ranked prior position, or null.
+ * @returns {RankAlertContext}
+ */
+const rankContext = (now: KeywordRank, nowPos: number | null, beforePos: number | null): RankAlertContext => ({
+   keyword: now.keyword,
+   priorPosition: beforePos,
+   currentPosition: nowPos,
+   ...(now.serpDomainsAbove && now.serpDomainsAbove.length > 0 ? { domainsAbove: now.serpDomainsAbove } : {}),
+});
+
+/**
+ * The "who is directly above you" sentence appended to a falling rank alert's
+ * detail, or '' when the stored SERP gave no domains to name.
+ * @param {KeywordRank} now - The current-period keyword.
+ * @returns {string}
+ */
+const domainsAboveSentence = (now: KeywordRank): string => (
+   now.serpDomainsAbove && now.serpDomainsAbove.length > 0
+      ? ` Directly above you now: ${now.serpDomainsAbove.join(', ')}.`
+      : ''
+);
 
 /**
  * RANK. Pair current and prior keywords by their term, then flag:
@@ -213,6 +310,7 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
             detail: `It was not ranking in the prior period and now sits at #${nowPos}.`,
             recommendation: 'Reinforce the page that earned this with internal links and a fresh, direct '
                + 'answer up top so the new rank holds and climbs.',
+            context: rankContext(now, nowPos, beforePos),
          });
          return;
       }
@@ -225,6 +323,7 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
             detail: `It fell out of the tracked rankings since last period (was #${beforePos}).`,
             recommendation: 'Check the target page for a recent content, redirect, or indexing change, and '
                + 'review the SERP for a new competitor that displaced it.',
+            context: rankContext(now, nowPos, beforePos),
          });
          return;
       }
@@ -243,9 +342,10 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
             pillar: 'rank',
             headline: `You dropped from #${beforePos} to #${nowPos} on "${now.keyword}"`
                + `${pageRef} and fell off page one.`,
-            detail: `Leaving the top ${PAGE_ONE_MAX} usually takes entry traffic with it.`,
+            detail: `Leaving the top ${PAGE_ONE_MAX} usually takes entry traffic with it.${domainsAboveSentence(now)}`,
             recommendation: 'Treat this as the priority SEO fix: refresh the page, shore up internal links, '
                + 'and recover the top-10 position before the lost traffic compounds.',
+            context: rankContext(now, nowPos, beforePos),
          });
          return;
       }
@@ -258,6 +358,7 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
             detail: `Crossing into the top ${PAGE_ONE_MAX} is where clicks accelerate.`,
             recommendation: 'Capitalize now: make sure the ranking page converts, and add supporting internal '
                + 'links so the page-one position sticks.',
+            context: rankContext(now, nowPos, beforePos),
          });
          return;
       }
@@ -269,10 +370,12 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
             headline: improved
                ? `"${now.keyword}"${pageRef} rose ${moved} spots, from #${beforePos} to #${nowPos}.`
                : `"${now.keyword}"${pageRef} fell ${moved} spots, from #${beforePos} to #${nowPos}.`,
-            detail: `A ${moved}-position move period over period${improved ? ' in your favor' : ' against you'}.`,
+            detail: `A ${moved}-position move period over period${improved ? ' in your favor' : ' against you'}.`
+               + `${improved ? '' : domainsAboveSentence(now)}`,
             recommendation: improved
                ? 'Keep the momentum: the page is trending up, so keep it fresh and well-linked.'
                : 'Investigate the slide early, while it is a few positions, before it leaves page one.',
+            context: rankContext(now, nowPos, beforePos),
          });
       }
    });
@@ -314,6 +417,119 @@ const detectTrafficChanges = (current: TrafficTotals, prior: TrafficTotals): Ale
    consider('Pageviews', current.pageviews, prior.pageviews);
    consider('Visitors', current.visitors, prior.visitors);
    return alerts;
+};
+
+/**
+ * CONTENT DECAY. For each page with a real PRIOR baseline (>= DECAY_BASELINE_MIN
+ * pageviews), flag a sustained period-over-period traffic decline of
+ * DECAY_DROP_MIN+ (>= DECAY_DROP_HIGH is high-severity, mirroring the traffic
+ * rule). The highest-value variant: when a tracked keyword TARGETS the decaying
+ * page and its rank HELD (worsened by at most DECAY_RANK_HELD_TOLERANCE positions,
+ * or improved) across the same two windows, the rank did not cause the drop, so
+ * the content itself has gone stale. The alert says so explicitly and the
+ * recommendation is always the same concrete move: refresh this content.
+ *
+ * Honest on missing data: no pages in either period, or a page below the prior
+ * baseline, produces NO alert. A page absent from the current period counts as 0
+ * current views (a real decline), because its PRIOR baseline is what qualifies it.
+ * Capped at DECAY_MAX_ALERTS (biggest declines first) so a site-wide event cannot
+ * drown the list; the site-wide story is the traffic pillar's job.
+ * @param {PageTraffic[] | undefined} currentPages - This period's per-page traffic.
+ * @param {PageTraffic[] | undefined} priorPages - The prior period's per-page traffic.
+ * @param {KeywordRank[]} currentKeywords - This period's keyword ranks (for the rank-held join).
+ * @param {KeywordRank[]} priorKeywords - The prior period's keyword ranks.
+ * @returns {Alert[]}
+ */
+const detectContentDecay = (
+   currentPages: PageTraffic[] | undefined,
+   priorPages: PageTraffic[] | undefined,
+   currentKeywords: KeywordRank[],
+   priorKeywords: KeywordRank[],
+): Alert[] => {
+   if (!currentPages || !priorPages || priorPages.length === 0) { return []; }
+
+   const currentByPage = new Map<string, number>();
+   currentPages.forEach((p) => {
+      const key = cleanPath(p.page);
+      if (!key) { return; }
+      currentByPage.set(key, (currentByPage.get(key) || 0) + p.pageviews);
+   });
+
+   // Keywords by the normalized page they target, current and prior, for the rank-held join.
+   const curKwByPage = new Map<string, KeywordRank[]>();
+   currentKeywords.forEach((k) => {
+      const key = cleanPath(k.targetPage || '');
+      if (!key) { return; }
+      curKwByPage.set(key, [...(curKwByPage.get(key) || []), k]);
+   });
+   const priorKwPos = new Map<string, number>();
+   priorKeywords.forEach((k) => {
+      if (isRanked(k.position)) { priorKwPos.set(k.keyword, k.position); }
+   });
+
+   type Decayed = { alert: Alert, decline: number };
+   const decayed: Decayed[] = [];
+
+   // Aggregate the prior side too (defensive: a caller may pass duplicate paths).
+   const priorByPage = new Map<string, number>();
+   priorPages.forEach((p) => {
+      const key = cleanPath(p.page);
+      if (!key) { return; }
+      priorByPage.set(key, (priorByPage.get(key) || 0) + p.pageviews);
+   });
+
+   priorByPage.forEach((before, page) => {
+      if (before < DECAY_BASELINE_MIN) { return; }
+      const now = currentByPage.get(page) || 0;
+      const decline = (before - now) / before;
+      if (decline < DECAY_DROP_MIN) { return; }
+      const dropPct = Math.abs(pctChange(now, before));
+      const severity: AlertSeverity = decline >= DECAY_DROP_HIGH ? 'high' : 'medium';
+
+      // The rank-held join: a keyword targeting this page that ranked in BOTH windows
+      // and did not fall comparably. Flat rank + falling traffic = stale content.
+      const heldKeyword = (curKwByPage.get(page) || []).find((k) => {
+         if (!isRanked(k.position)) { return false; }
+         const beforePos = priorKwPos.get(k.keyword);
+         return beforePos !== undefined && k.position <= beforePos + DECAY_RANK_HELD_TOLERANCE;
+      });
+
+      const recommendation = 'Refresh this content: update its facts, dates, and examples to match current search '
+         + 'intent, sharpen the direct answer up top, and re-link it from your newer pages.';
+      if (heldKeyword) {
+         const beforePos = priorKwPos.get(heldKeyword.keyword) as number;
+         decayed.push({
+            decline,
+            alert: {
+               severity,
+               pillar: 'content_decay',
+               headline: `${page} is decaying: traffic fell ${dropPct}% (${before} to ${now} pageviews) while its `
+                  + 'rank held.',
+               detail: `"${heldKeyword.keyword}" still ranks #${heldKeyword.position} (was #${beforePos}), so a rank `
+                  + 'loss did not cause the drop. Flat rank with falling traffic is the classic stale-content signal: '
+                  + 'the page is losing clicks, not position.',
+               recommendation,
+            },
+         });
+         return;
+      }
+      decayed.push({
+         decline,
+         alert: {
+            severity,
+            pillar: 'content_decay',
+            headline: `Traffic to ${page} fell ${dropPct}% period over period (${before} to ${now} pageviews).`,
+            detail: `A sustained per-page decline off a real baseline of ${before} prior pageviews.`,
+            recommendation,
+         },
+      });
+   });
+
+   // Biggest declines first, capped so a site-wide event cannot drown the list.
+   return decayed
+      .sort((a, b) => b.decline - a.decline)
+      .slice(0, DECAY_MAX_ALERTS)
+      .map((d) => d.alert);
 };
 
 /**
@@ -497,6 +713,7 @@ export const detectChanges = (current: PeriodData, prior: PeriodData): AnalystOu
    const alerts: Alert[] = [
       ...detectRankChanges(current.keywords, prior.keywords),
       ...detectTrafficChanges(current.traffic, prior.traffic),
+      ...detectContentDecay(current.pages, prior.pages, current.keywords, prior.keywords),
       ...detectAiChanges(current.aiEngines, prior.aiEngines),
       ...detectConversionChanges(
          current.formSubmissions,
@@ -507,7 +724,9 @@ export const detectChanges = (current: PeriodData, prior: PeriodData): AnalystOu
    ];
 
    // Stable pillar tiebreak so equal-severity alerts have a deterministic order.
-   const pillarOrder: Record<AlertPillar, number> = { rank: 0, traffic: 1, ai: 2, conversions: 3 };
+   const pillarOrder: Record<AlertPillar, number> = {
+      rank: 0, traffic: 1, content_decay: 2, ai: 3, conversions: 4,
+   };
    alerts.sort((a, b) => {
       const bySeverity = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
       if (bySeverity !== 0) { return bySeverity; }
