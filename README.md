@@ -263,28 +263,26 @@ Full per-tool details are in [`mcp/README.md`](mcp/README.md).
 
 ## Connect Google Search Console (optional)
 
-Search Console adds Google's own query, impression, and click data to the `get_insight` tool. It is optional: everything else works without it. Connecting it is a conversation, the same shape as turning on SEO:
+Search Console adds Google's own query, impression, and click data to the `get_insight` tool. **It is optional and can be done any time (or never):** everything else in s33k works without it. Budget 10 to 15 unhurried minutes for the Google side.
 
-```text
-You: Connect Search Console.
+Connecting it is a conversation. You ask your LLM to connect it, and it recites these steps (they also live inside s33k's own knowledge, so any MCP client can guide you without leaving the chat). The steps below match that guidance so you can also do it solo:
 
-Assistant: I will walk you through it. In Google Cloud (console.cloud.google.com):
-  create or pick a project, enable the Search Console API, then under IAM & Admin
-  create a service account (no roles needed) and download a JSON key for it.
+1. **Create a Google Cloud project.** Go to [console.cloud.google.com](https://console.cloud.google.com) and create or pick a project. A project is required: if Google prompts you to pick an organization first, select it, then create a project inside it. The project is just a container; any name works.
+2. **Enable the Search Console API.** APIs and Services > Library > search for "Google Search Console API" > Enable.
+3. **Create a service account.** Easiest path: APIs and Services > Credentials > Create credentials > "Help me choose", pick the Search Console API and **Application data** (that choice is what creates a service account). Name it anything. If it offers to grant the account a role on the project, **skip it**: no roles are needed, its permission comes from Search Console in step 6.
+4. **Download the JSON key file.** This is a service-account key, **not an "API key"**: if a screen offers to create an API key, back out, that is a different credential and will not work. Go to Credentials > Service Accounts > click your account > **Keys** tab > Add Key > Create new key > **JSON** > Create. A `.json` file downloads. Note its name and location (Google names it something long; you can rename it).
+5. **Send the file to s33k.** Ask your LLM to connect Search Console; it mints a one-time drop command. If your assistant has shell access (for example Claude Code), just let it run the command for you: the file goes terminal-to-server and its contents never enter the chat. To run it yourself, do so from the folder holding the file, with the `@filename` matching the file's real name:
 
-  That JSON holds a private key, so it should not be pasted into chat. I minted a
-  one-time drop link. Run this in your own terminal, from the folder with the file:
+   ```bash
+   curl -sS -X POST https://your-s33k-host/api/key-drop/eyJz... --data-binary @service-account.json
+   ```
 
-    curl -sS -X POST https://your-s33k-host/api/key-drop/eyJz... --data-binary @service-account.json
+   (macOS note: Terminal is often blocked from reading `~/Downloads` with "operation not permitted"; move the file to your home folder to avoid that.)
+6. **Grant the service account access in Search Console.** s33k's response confirms the service account's email (a machine identity Google generated, unrelated to your personal email). Add that email as a user with **Full** permission on your property at [search.google.com/search-console](https://search.google.com/search-console) (Settings > Users and permissions). That grant is how Google authorizes the read; until you make it, the credential can see nothing. Then ask your LLM to run `get_insight`.
 
-  s33k will confirm the service account's email. Add that email as a user with Full
-  permission on your property at search.google.com/search-console, then tell me and
-  I will pull your Search Console data.
-```
+The credential is stored encrypted and no HTTP response ever returns it. The drop link for this file kind is single-use and lasts 60 minutes, enough time to finish the Google steps first.
 
-The credential goes straight from your terminal to your server and is stored encrypted; it never passes through the chat. The five Google steps also live inside s33k's own knowledge, so your LLM can guide the whole thing without you leaving the conversation.
-
-Prefer to configure it yourself? Two other paths work and need no drop link: set the service-account `SEARCH_CONSOLE_CLIENT_EMAIL` / `SEARCH_CONSOLE_PRIVATE_KEY` env vars, or set `GSC_OAUTH_CLIENT_ID` / `GSC_OAUTH_CLIENT_SECRET` / `NEXT_PUBLIC_APP_URL` and use the OAuth "Connect Google Search Console" consent flow. When none of these is configured, `get_insight` reports "not connected" rather than failing, so this is purely optional.
+**Prefer to configure it yourself?** Two other paths work and need no drop link: set the service-account `SEARCH_CONSOLE_CLIENT_EMAIL` / `SEARCH_CONSOLE_PRIVATE_KEY` env vars, or set `GSC_OAUTH_CLIENT_ID` / `GSC_OAUTH_CLIENT_SECRET` / `NEXT_PUBLIC_APP_URL` and use the OAuth "Connect Google Search Console" consent flow. When none of these is configured, `get_insight` reports "not connected" rather than failing, so this is purely optional.
 
 ## Rank-change email (optional)
 
