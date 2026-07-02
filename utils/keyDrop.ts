@@ -93,7 +93,9 @@ export const validateServiceAccountJson = (raw: string): ServiceAccountValidatio
       };
    }
    const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
-   if (!clientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clientEmail)) {
+   // Tight character classes on purpose: the email is echoed into the plain-text confirmation, so
+   // the permissive [^\s@] classes would let control bytes (e.g. ANSI escapes) reach a terminal.
+   if (!clientEmail || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+$/.test(clientEmail)) {
       return {
          ok: false,
          reason: 'The JSON has no usable "client_email". Download a fresh JSON key for the service account and send that file unmodified.',
