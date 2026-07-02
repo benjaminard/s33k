@@ -164,9 +164,18 @@ open-source repo, not an internal ops doc.
   smtp, GSC/adwords creds, non-'none' scraper_type) or an env-configured scraper counts as setup
   COMPLETED even without the `setup_completed` flag, so every pre-existing install (including the
   production instance) never sees the setup page. See computeSetupCompleted in utils/setupState.ts.
-- **Key drop (enable SEO later, from a conversation):** the `mint_key_drop` tool returns a signed
-  (HMAC + 15 min TTL + single-use nonce, the searchConsoleOAuth state pattern) curl one-liner; the
-  user pastes the key on STDIN in their own terminal, so it never touches chat or shell history.
+- **Key drop (enable a secret-gated module later, from a conversation):** the `mint_key_drop` tool
+  returns a signed (HMAC + 15 min TTL + single-use nonce, the searchConsoleOAuth state pattern)
+  curl one-liner; the secret goes terminal-to-server, so it never touches chat or shell history.
+  Two kinds: `serper` (the key pasted on STDIN, all whitespace stripped, 512-char cap) and
+  `gsc_service_account` (a whole Google service-account JSON piped with
+  `--data-binary @service-account.json`; TRIM ONLY, never strip whitespace, the PEM inside depends
+  on its newlines; validated before storing; cap = the 8KB body cap; saved cryptr-encrypted into
+  the settings `search_console_client_email` / `search_console_private_key` fields the GSC read
+  path already falls back to; the confirmation echoes the client_email ON PURPOSE, it is the
+  identifier the user must grant Full permission in Search Console, never the private_key). The
+  Google-side 5-step walkthrough lives ONCE in `GSC_SERVICE_ACCOUNT_SETUP_STEPS`
+  (utils/keyDrop.ts), shared by the mint response and utils/knowledge.ts.
   POST /api/key-drop/[nonce] is the signed-nonce public consume route (NOT in allowedApiRoutes;
   body parser disabled because curl --data-binary defaults to an urlencoded Content-Type that
   Next's parser would mangle). Consumed nonces persist in the settings blob (restart-durable).
@@ -176,8 +185,11 @@ open-source repo, not an internal ops doc.
 - **Modular pillars:** SEO is an OPTIONAL module (enabled iff a scraper key + type resolve; see
   computeSeoConfigured). With SEO off, computeSetupState omits the track_keywords step, so a
   keyless instance with flowing analytics reads COMPLETE/healthy. setup_status and start_here
-  carry a `modules` block naming Analytics / AI referrals / SEO status and the mint_key_drop
-  enablement path.
+  carry a `modules` block naming Analytics / AI referrals / SEO / Search Console status and the
+  mint_key_drop enablement path. Search Console is the fourth optional module: connected iff any
+  GSC credential resolves (computeGscConfigured in utils/setupState.ts mirrors the
+  getSearchConsoleApiInfo precedence as presence checks; the per-domain OAuth token counts only
+  with the GSC_OAUTH_* env pair, since the read path builds its OAuth2Client from those).
 
 ### No server-side LLM, ever (a verified-true trust property)
 - The AI features (`briefing`, `insights`, `ai_visibility`, `alerts`, `entry_pages`) are

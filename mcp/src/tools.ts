@@ -117,9 +117,10 @@ server.registerTool(
          + 'list (entry_pages for which pages AI search lands on, striking_distance for the quickest SEO wins, dashboard for '
          + 'the full overview), and a ready-to-show rendered tour. Every response also carries a MODULES block (Analytics: live '
          + 'once beacon events flow; AI referrals: live with analytics; SEO: enabled only when a SERP scraper key is configured, '
-         + 'otherwise "not enabled" with the mint_key_drop enablement path). A keyless instance with flowing analytics is HEALTHY '
-         + 'with the SEO module off, not incomplete. Composes existing data (dashboard + setup + reports); never queries an LLM; '
-         + 'never fails, every mode is a usable next move.',
+         + 'otherwise "not enabled" with the mint_key_drop enablement path; Search Console: connected when a GSC credential '
+         + 'resolves, otherwise "not_connected" with its own mint_key_drop path for a service-account JSON). A keyless instance '
+         + 'with flowing analytics is HEALTHY with the SEO module off, not incomplete. Composes existing data (dashboard + setup '
+         + '+ reports); never queries an LLM; never fails, every mode is a usable next move.',
       inputSchema: {
          domain: z.string().optional().describe('The domain to start on, e.g. "example.com". Omit to pick from your tracked domains.'),
       },
@@ -281,7 +282,7 @@ server.registerTool(
    {
       title: 'Get Search Console insight',
       description:
-         'Read Google Search Console insight for a domain: its top pages, top keywords, top countries, and aggregate stats. Use this for real impression and click data straight from Google, beyond the keywords you explicitly track. Requires Search Console to be connected for the domain in s33k, otherwise it returns an error.',
+         'Read Google Search Console insight for a domain: its top pages, top keywords, top countries, and aggregate stats. Use this for real impression and click data straight from Google, beyond the keywords you explicitly track. Requires Search Console to be connected, otherwise it returns an error. The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends the service-account JSON from the user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
       inputSchema: {
          domain: z.string().describe('The domain to get insight for, e.g. "example.com".'),
       },
@@ -306,8 +307,10 @@ server.registerTool(
       description:
          'Start the click-to-authorize Google Search Console connection for a domain you own. Returns a Google consent link to open and approve, '
          + 'plus a one-line instruction to show the user. Once approved, get_insight returns the real queries each page actually ranks for, the '
-         + 'authoritative answer to "what am I ranking for". This replaces pasting a service-account JSON. Connecting requires write access to the '
-         + 'domain. If the instance has no GSC OAuth app configured, the response says so.',
+         + 'authoritative answer to "what am I ranking for". Connecting requires write access to the domain, and the instance must have a GSC '
+         + 'OAuth app configured (the response says so when it does not). When no OAuth app is configured, the easiest path is mint_key_drop '
+         + 'with secret "gsc_service_account": it mints a one-curl-line drop for a Google service-account JSON and carries the full '
+         + 'Google-side walkthrough, and the credential never passes through this chat.',
       inputSchema: {
          domain: z.string().describe('The domain to connect Google Search Console for, e.g. "example.com". You must own it.'),
       },
@@ -1023,7 +1026,9 @@ server.registerTool(
          'The guided-setup walkthrough. Describes the instance as MODULES (Analytics: live once beacon '
          + 'events flow, otherwise waiting for the beacon; AI referrals: live with analytics; SEO: enabled '
          + 'only when a SERP scraper key is configured, otherwise "not enabled" with the enablement path '
-         + 'via mint_key_drop) and reports where a domain is in setup as a checklist with percentComplete '
+         + 'via mint_key_drop; Search Console: connected when a GSC credential resolves, otherwise '
+         + '"not_connected" with its own mint_key_drop path for a service-account JSON) '
+         + 'and reports where a domain is in setup as a checklist with percentComplete '
          + 'plus the single next step and the exact tool to call. When the SEO module is off, tracking '
          + 'keywords is NOT a setup step: an analytics-only instance with flowing events reads as healthy '
          + 'and complete, with SEO simply an optional module that is off. Use this to walk a new user from '
@@ -1058,19 +1063,26 @@ server.registerTool(
    {
       title: 'Mint a key-drop command (set a secret without pasting it into chat)',
       description:
-         'Enable a secret-gated module (today: SEO via a Serper API key) WITHOUT the secret ever passing '
-         + 'through this conversation. Returns a single-use, signed drop link (expires in 15 minutes) and a '
-         + 'ready-to-run one-liner: `curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`. '
-         + 'Show the user the command and tell them: run it in your own terminal, paste the key, press '
-         + 'Enter, then Ctrl-D. The key goes terminal-to-server (stdin, so it never lands in shell history '
-         + 'or this chat) and is saved encrypted on the server. NEVER ask the user to paste the key into '
-         + 'the conversation; mint this command instead. After the user confirms they ran it, the SEO '
-         + 'module is enabled: verify with setup_status and start tracking keywords.',
+         'Enable a secret-gated module WITHOUT the secret ever passing through this conversation. Returns a '
+         + 'single-use, signed drop link (expires in 15 minutes) and a ready-to-run one-liner. Two kinds: '
+         + '"serper" (SEO rank tracking) mints `curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`; '
+         + 'the user runs it in their own terminal, pastes the key, presses Enter, then Ctrl-D. '
+         + '"gsc_service_account" (Google Search Console, the easiest connect path) mints '
+         + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @service-account.json`; the user runs '
+         + 'it in the folder holding the service-account JSON downloaded from Google Cloud, and the response ALSO '
+         + 'carries googleCloudSteps, the full Google-side walkthrough (create a project, enable the Search Console '
+         + 'API, create a service account, download a JSON key, then grant the service-account email Full permission '
+         + 'on the property in Search Console), so guide the user through those steps yourself. Either way the '
+         + 'secret goes terminal-to-server (never shell history, never this chat) and is saved encrypted on the '
+         + 'server. NEVER ask the user to paste a key or JSON into the conversation; mint this command instead. '
+         + 'After the user confirms they ran it, verify: setup_status for the SEO module, get_insight for Search '
+         + 'Console (after they grant the service-account email access on the property).',
       inputSchema: {
          secret: z
-            .enum(['serper'])
+            .enum(['serper', 'gsc_service_account'])
             .default('serper')
-            .describe('Which secret the drop sets. "serper" (the default) enables the SEO module.'),
+            .describe('Which secret the drop sets. "serper" (the default) enables the SEO module; '
+               + '"gsc_service_account" connects Google Search Console from a service-account JSON file.'),
       },
    },
    async ({ secret }) => {
@@ -1082,6 +1094,7 @@ server.registerTool(
             url: data.url,
             expiresInMinutes: data.expiresInMinutes,
             instructions: data.instructions,
+            googleCloudSteps: data.googleCloudSteps,
             error: data.error,
          });
       } catch (err) {

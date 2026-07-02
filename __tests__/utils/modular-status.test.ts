@@ -38,6 +38,34 @@ describe('computeModules', () => {
    });
 });
 
+describe('computeModules: the Search Console module (fourth, optional)', () => {
+   it('connected when the route resolved a GSC credential (settings fields, env pair, or per-domain OAuth)', () => {
+      const modules = computeModules({ recentEvents: 42, seoEnabled: true, keywordCount: 7, gscConnected: true });
+      const sc = modules.find((m) => m.key === 'search_console')!;
+      expect(sc.status).toBe('connected');
+      expect(sc.detail).toContain('get_insight');
+      expect(sc.enable).toBeUndefined();
+   });
+
+   it('not_connected carries the key-drop enablement path', () => {
+      const modules = computeModules({ recentEvents: 42, seoEnabled: true, keywordCount: 7, gscConnected: false });
+      const sc = modules.find((m) => m.key === 'search_console')!;
+      expect(sc.status).toBe('not_connected');
+      expect(sc.detail).toContain('optional');
+      expect(sc.enable).toContain('connect Search Console');
+      expect(sc.enable).toContain('key-drop');
+      expect(sc.enable).toContain('service-account');
+   });
+
+   it('gscConnected omitted reads not_connected, and the first three modules are byte-identical', () => {
+      const withSignal = computeModules({ recentEvents: 42, seoEnabled: false, keywordCount: 0, gscConnected: false });
+      const without = computeModules({ recentEvents: 42, seoEnabled: false, keywordCount: 0 });
+      expect(without.find((m) => m.key === 'search_console')!.status).toBe('not_connected');
+      expect(without.filter((m) => m.key !== 'search_console')).toEqual(withSignal.filter((m) => m.key !== 'search_console'));
+      expect(without).toEqual(withSignal);
+   });
+});
+
 describe('computeSetupState with the SEO module OFF (seoEnabled: false)', () => {
    it('a keyless instance with flowing analytics + goals is COMPLETE (healthy, module off)', () => {
       const state = computeSetupState({

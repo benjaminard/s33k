@@ -1,7 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ensureSynced } from '../../../database/database';
 import authorize from '../../../utils/authorize';
-import { KEY_DROP_SECRETS, KeyDropSecret, signKeyDropToken, KEY_DROP_TTL_MS } from '../../../utils/keyDrop';
+import {
+   KEY_DROP_SECRETS, KeyDropSecret, signKeyDropToken, KEY_DROP_TTL_MS, GSC_SERVICE_ACCOUNT_SETUP_STEPS,
+} from '../../../utils/keyDrop';
 import { publicBaseUrlHeaderFree } from '../../../utils/setupState';
 
 // POST /api/key-drop: MINT a single-use key-drop token + the ready-to-run one-liner.
@@ -26,6 +28,8 @@ type MintResponse = {
    command?: string,
    expiresInMinutes?: number,
    instructions?: string,
+   /** gsc_service_account only: the Google-side walkthrough, so an LLM can guide the user without web search. */
+   googleCloudSteps?: string[],
    error?: string | null,
 };
 
@@ -45,16 +49,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
    try {
       const token = signKeyDropToken(secret);
       const url = `${publicBaseUrlHeaderFree()}/api/key-drop/${token}`;
-      const command = `curl -sS -X POST ${url} --data-binary @-`;
+      // Per-kind delivery: a Serper key is short enough to paste on stdin; a service-account
+      // credential is a downloaded JSON FILE, so the one-liner pipes the file explicitly.
+      const command = secret === 'gsc_service_account'
+         ? `curl -sS -X POST ${url} --data-binary @service-account.json`
+         : `curl -sS -X POST ${url} --data-binary @-`;
+      const instructions = secret === 'gsc_service_account'
+         ? 'Run the command in your own terminal, in the folder holding the service-account JSON you downloaded from '
+            + 'Google Cloud (rename the file or edit the @filename part to match). The file goes straight from your '
+            + 'terminal to your s33k server: it never passes through this chat. The link is single-use and expires in '
+            + '15 minutes. The server response confirms the service-account email; add that email as a user with Full '
+            + 'permission on your property at search.google.com/search-console, then ask for get_insight.'
+         : 'Run the command in your own terminal, paste the key, press Enter, then Ctrl-D. '
+            + 'The key goes straight from your terminal to your s33k server: it never passes through this chat '
+            + 'and never lands in shell history. The link is single-use and expires in 15 minutes.';
       return res.status(200).json({
          secret,
          token,
          url,
          command,
          expiresInMinutes: Math.round(KEY_DROP_TTL_MS / 60000),
-         instructions: 'Run the command in your own terminal, paste the key, press Enter, then Ctrl-D. '
-            + 'The key goes straight from your terminal to your s33k server: it never passes through this chat '
-            + 'and never lands in shell history. The link is single-use and expires in 15 minutes.',
+         instructions,
+         // The Google-side walkthrough rides along for the gsc kind so the LLM can guide the user
+         // step by step (the steps live ONCE in utils/keyDrop.ts, shared with the knowledge layer).
+         ...(secret === 'gsc_service_account' ? { googleCloudSteps: [...GSC_SERVICE_ACCOUNT_SETUP_STEPS] } : {}),
          error: null,
       });
    } catch (error2) {

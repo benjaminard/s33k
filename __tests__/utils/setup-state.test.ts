@@ -22,7 +22,7 @@ jest.mock('../../utils/settingsStore', () => ({
 // eslint-disable-next-line import/first
 import {
    getSetupToken, verifySetupToken, markSetupCompleted, isSetupCompleted, announceSetupOnce,
-   computeSetupCompleted, computeSeoConfigured, publicBaseUrlHeaderFree, __resetSetupRuntimeState,
+   computeSetupCompleted, computeSeoConfigured, computeGscConfigured, publicBaseUrlHeaderFree, __resetSetupRuntimeState,
    registerSetupDomainCounter,
 } from '../../utils/setupState';
 // eslint-disable-next-line import/first
@@ -57,7 +57,10 @@ describe('setup token', () => {
    it('verifies only the exact live token', () => {
       const token = getSetupToken();
       expect(verifySetupToken(token)).toBe(true);
-      expect(verifySetupToken(`${token.slice(0, -1)}0`)).toBe(false);
+      // Tamper DETERMINISTICALLY: replacing the last char with a literal '0' was a 1-in-16 flake
+      // (a random hex token already ending in '0' made the "tampered" value equal the real one).
+      // Same guard the key-drop suite uses.
+      expect(verifySetupToken(`${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`)).toBe(false);
       expect(verifySetupToken('')).toBe(false);
       expect(verifySetupToken(undefined)).toBe(false);
       expect(verifySetupToken(token.slice(0, 10))).toBe(false);
@@ -170,6 +173,52 @@ describe('computeSeoConfigured (the SEO-module gate, pure)', () => {
 
    it('off with a type but no key', () => {
       expect(computeSeoConfigured({ scraper_type: 'serper' }, {} as NodeJS.ProcessEnv)).toBe(false);
+   });
+});
+
+describe('computeGscConfigured (the Search Console module gate, pure)', () => {
+   it('not connected with no credential anywhere', () => {
+      expect(computeGscConfigured({}, {} as NodeJS.ProcessEnv)).toBe(false);
+      expect(computeGscConfigured({}, {} as NodeJS.ProcessEnv, null)).toBe(false);
+   });
+
+   it('connected via the stored settings service-account pair (the key-drop fields)', () => {
+      expect(computeGscConfigured(
+         { search_console_client_email: 'enc-email', search_console_private_key: 'enc-key' },
+         {} as NodeJS.ProcessEnv,
+      )).toBe(true);
+   });
+
+   it('NOT connected when only one settings field is set', () => {
+      expect(computeGscConfigured({ search_console_client_email: 'enc-email' }, {} as NodeJS.ProcessEnv)).toBe(false);
+      expect(computeGscConfigured({ search_console_private_key: 'enc-key' }, {} as NodeJS.ProcessEnv)).toBe(false);
+   });
+
+   it('connected via the env service-account pair', () => {
+      const env = { SEARCH_CONSOLE_CLIENT_EMAIL: 'sa@x.iam.gserviceaccount.com', SEARCH_CONSOLE_PRIVATE_KEY: 'pem' };
+      expect(computeGscConfigured({}, env as unknown as NodeJS.ProcessEnv)).toBe(true);
+   });
+
+   it('connected via a per-domain OAuth refresh token ONLY when the OAuth env pair exists', () => {
+      const blob = JSON.stringify({ property_type: 'domain', oauth_refresh_token: 'enc-token' });
+      const oauthEnv = { GSC_OAUTH_CLIENT_ID: 'id', GSC_OAUTH_CLIENT_SECRET: 'sec' } as unknown as NodeJS.ProcessEnv;
+      expect(computeGscConfigured({}, oauthEnv, blob)).toBe(true);
+      // A refresh token without the OAuth app config cannot be used by the read path.
+      expect(computeGscConfigured({}, {} as NodeJS.ProcessEnv, blob)).toBe(false);
+   });
+
+   it('connected via a per-domain service-account pair in the blob (no OAuth env needed)', () => {
+      const blob = JSON.stringify({ client_email: 'enc-email', private_key: 'enc-key' });
+      expect(computeGscConfigured({}, {} as NodeJS.ProcessEnv, blob)).toBe(true);
+   });
+
+   it('a malformed blob falls back to the settings+env answer instead of throwing', () => {
+      expect(computeGscConfigured({}, {} as NodeJS.ProcessEnv, '{not json')).toBe(false);
+      expect(computeGscConfigured(
+         { search_console_client_email: 'enc-email', search_console_private_key: 'enc-key' },
+         {} as NodeJS.ProcessEnv,
+         '{not json',
+      )).toBe(true);
    });
 });
 

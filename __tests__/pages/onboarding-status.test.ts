@@ -8,7 +8,11 @@ jest.mock('../../database/models/goal', () => ({ __esModule: true, default: { co
 jest.mock('../../utils/authorize', () => ({ __esModule: true, default: jest.fn() }));
 // setupState pulls the settings store (sequelize models) in; mock the one read the route makes.
 // Default: SEO enabled (a scraper key configured), the legacy shape every existing case assumes.
-jest.mock('../../utils/setupState', () => ({ __esModule: true, isSeoConfigured: jest.fn(async () => true) }));
+jest.mock('../../utils/setupState', () => ({
+   __esModule: true,
+   isSeoConfigured: jest.fn(async () => true),
+   isGscConfigured: jest.fn(async () => false),
+}));
 
 // eslint-disable-next-line import/first
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -25,7 +29,7 @@ import GoalModel from '../../database/models/goal';
 // eslint-disable-next-line import/first
 import authorizeFn from '../../utils/authorize';
 // eslint-disable-next-line import/first
-import { isSeoConfigured } from '../../utils/setupState';
+import { isSeoConfigured, isGscConfigured } from '../../utils/setupState';
 
 const mockDomain = DomainModel as unknown as { findOne: jest.Mock };
 const mockKeyword = KeywordModel as unknown as { count: jest.Mock };
@@ -33,6 +37,7 @@ const mockEvent = S33kEventModel as unknown as { count: jest.Mock };
 const mockGoal = GoalModel as unknown as { count: jest.Mock };
 const mockAuthorize = authorizeFn as unknown as jest.Mock;
 const mockSeoConfigured = isSeoConfigured as unknown as jest.Mock;
+const mockGscConfigured = isGscConfigured as unknown as jest.Mock;
 
 const row = (d: Record<string, unknown>) => ({ get: () => d, ...d });
 const makeReq = (q: Record<string, string>): NextApiRequest => ({ method: 'GET', query: q, body: {}, headers: {} } as unknown as NextApiRequest);
@@ -48,6 +53,7 @@ beforeEach(() => {
    jest.clearAllMocks();
    mockAuthorize.mockResolvedValue({ authorized: true, account: null, error: undefined });
    mockSeoConfigured.mockResolvedValue(true);
+   mockGscConfigured.mockResolvedValue(false);
 });
 
 describe('GET /api/onboarding-status', () => {
@@ -131,5 +137,36 @@ describe('GET /api/onboarding-status with the SEO module OFF (modular pillars)',
       expect(res.payload.percentComplete).toBe(0);
       expect(res.payload.nextStep.key).toBe('add_domain');
       expect(res.payload.modules.find((m: any) => m.key === 'analytics').status).toBe('waiting_for_beacon');
+   });
+});
+
+describe('GET /api/onboarding-status Search Console module (fourth module)', () => {
+   it('reads connected when a GSC credential resolves, with no enable path', async () => {
+      mockGscConfigured.mockResolvedValue(true);
+      mockDomain.findOne.mockResolvedValue(row({ ID: 1, domain: 'x.com', search_console: '{"client_email":"e","private_key":"k"}' }));
+      mockKeyword.count.mockResolvedValue(5);
+      mockEvent.count.mockResolvedValue(100);
+      mockGoal.count.mockResolvedValue(2);
+      const res = makeRes();
+      await handler(makeReq({ domain: 'x.com' }), res);
+      const sc = res.payload.modules.find((m: any) => m.key === 'search_console');
+      expect(sc.status).toBe('connected');
+      expect(sc.enable).toBeUndefined();
+      // The route hands the domain's search_console blob to the credential check.
+      expect(mockGscConfigured).toHaveBeenCalledWith('{"client_email":"e","private_key":"k"}');
+   });
+
+   it('reads not_connected with the key-drop enablement path when no credential resolves', async () => {
+      mockDomain.findOne.mockResolvedValue(row({ ID: 1, domain: 'x.com' }));
+      mockKeyword.count.mockResolvedValue(5);
+      mockEvent.count.mockResolvedValue(100);
+      mockGoal.count.mockResolvedValue(2);
+      const res = makeRes();
+      await handler(makeReq({ domain: 'x.com' }), res);
+      const sc = res.payload.modules.find((m: any) => m.key === 'search_console');
+      expect(sc.status).toBe('not_connected');
+      expect(sc.enable).toContain('connect Search Console');
+      expect(sc.enable).toContain('key-drop');
+      expect(sc.enable).toContain('service-account');
    });
 });

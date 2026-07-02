@@ -28,7 +28,11 @@ jest.mock('../../utils/analytics', () => ({
 }));
 // setupState pulls the settings store (sequelize models) in; mock the one read the route makes.
 // Default: SEO enabled (a scraper key configured), the legacy shape every existing case assumes.
-jest.mock('../../utils/setupState', () => ({ __esModule: true, isSeoConfigured: jest.fn(async () => true) }));
+jest.mock('../../utils/setupState', () => ({
+   __esModule: true,
+   isSeoConfigured: jest.fn(async () => true),
+   isGscConfigured: jest.fn(async () => false),
+}));
 
 // eslint-disable-next-line import/first
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -47,7 +51,7 @@ import authorizeFn from '../../utils/authorize';
 // eslint-disable-next-line import/first
 import { getAnalyticsProvider } from '../../utils/analytics';
 // eslint-disable-next-line import/first
-import { isSeoConfigured } from '../../utils/setupState';
+import { isSeoConfigured, isGscConfigured } from '../../utils/setupState';
 
 const mockDomain = DomainModel as unknown as { findOne: jest.Mock, findAll: jest.Mock };
 const mockKeyword = KeywordModel as unknown as { findAll: jest.Mock, count: jest.Mock };
@@ -56,6 +60,7 @@ const mockGoal = GoalModel as unknown as { findAll: jest.Mock, count: jest.Mock 
 const mockAuthorize = authorizeFn as unknown as jest.Mock;
 const mockProvider = getAnalyticsProvider as unknown as jest.Mock;
 const mockSeoConfigured = isSeoConfigured as unknown as jest.Mock;
+const mockGscConfigured = isGscConfigured as unknown as jest.Mock;
 
 const row = (data: Record<string, unknown>) => ({ get: () => data, ...data });
 const pv = (session: string, page: string, source: string, is_bot: boolean, created: string) =>
@@ -86,6 +91,7 @@ const providerStub = (over: Partial<Record<string, unknown>> = {}) => ({
 beforeEach(() => {
    jest.clearAllMocks();
    mockAuthorize.mockResolvedValue({ authorized: true, account: null, error: undefined });
+   mockGscConfigured.mockResolvedValue(false);
    // Owned by default (resolveDomainAccess does Domain.findOne under the hood): the realistic
    // onboarded state where the only step left is putting the tracking script on the site. The
    // first-party beacon keys events by domain, so start_here emits a real copyable snippet (site
@@ -406,5 +412,21 @@ describe('GET /api/start-here with the SEO module OFF (modular pillars)', () => 
       // With SEO off, the checklist has four steps (track_keywords omitted), not a fifth undone one.
       expect(res.payload.checklist.map((c: any) => c.key)).not.toContain('track_keywords');
       expect(res.payload.modules.find((m: any) => m.key === 'seo').status).toBe('not_enabled');
+   });
+
+   it('surfaces the Search Console module: not_connected with the key-drop path, connected when a credential resolves', async () => {
+      const res = makeRes();
+      await handler(makeReq({ domain: 'getmasset.com' }), res);
+      const sc = res.payload.modules.find((m: any) => m.key === 'search_console');
+      expect(sc.status).toBe('not_connected');
+      expect(sc.enable).toContain('connect Search Console');
+      expect(sc.enable).toContain('key-drop');
+
+      mockGscConfigured.mockResolvedValue(true);
+      const res2 = makeRes();
+      await handler(makeReq({ domain: 'getmasset.com' }), res2);
+      const sc2 = res2.payload.modules.find((m: any) => m.key === 'search_console');
+      expect(sc2.status).toBe('connected');
+      expect(sc2.enable).toBeUndefined();
    });
 });

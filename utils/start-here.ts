@@ -143,9 +143,9 @@ export const computeSetupState = (s: SetupSignals): SetupState => {
 
 /** One module's status line. `enable` is only present when the module is off and enable-able. */
 export type ModuleStatus = {
-   key: 'analytics' | 'ai_referrals' | 'seo',
+   key: 'analytics' | 'ai_referrals' | 'seo' | 'search_console',
    name: string,
-   status: 'live' | 'waiting_for_beacon' | 'enabled' | 'not_enabled',
+   status: 'live' | 'waiting_for_beacon' | 'enabled' | 'not_enabled' | 'connected' | 'not_connected',
    detail: string,
    enable?: string,
 };
@@ -155,6 +155,12 @@ export type ModuleSignals = {
    recentEvents: number,
    seoEnabled: boolean,
    keywordCount: number,
+   // Search Console is the fourth optional module: connected when ANY GSC credential resolves
+   // (the settings service-account pair the gsc_service_account key drop fills, the env pair, or
+   // a per-domain OAuth token with the OAuth env config; see computeGscConfigured in
+   // utils/setupState.ts). Optional and additive: callers that do not pass it read not_connected,
+   // and the first three modules are byte-identical either way.
+   gscConnected?: boolean,
 };
 
 /**
@@ -192,6 +198,18 @@ export const computeModules = (m: ModuleSignals): ModuleStatus[] => [
       ...(m.seoEnabled ? {} : {
          enable: 'Ask me to enable SEO and I will mint a key-drop command (mint_key_drop): you run one curl line in '
             + 'your own terminal and paste your Serper key there, so the key never passes through this chat.',
+      }),
+   },
+   {
+      key: 'search_console',
+      name: 'Search Console',
+      status: m.gscConnected ? 'connected' : 'not_connected',
+      detail: m.gscConnected
+         ? 'Connected: get_insight returns your real Google queries, impressions, and clicks per page.'
+         : 'Not connected (optional): real Google query, impression, and click data (get_insight) needs a Search Console credential.',
+      ...(m.gscConnected ? {} : {
+         enable: 'Ask me to connect Search Console and I will mint a key-drop command for your service-account file: '
+            + 'one curl line sends the JSON from your own terminal, so the credential never passes through this chat.',
       }),
    },
 ];

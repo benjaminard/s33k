@@ -2,8 +2,9 @@ import crypto from 'crypto';
 import type { NextApiRequest } from 'next';
 
 /*
- * KEY DROP: enable a secret-gated module (today: the Serper key for SEO) LATER, from an LLM
- * conversation, WITHOUT the secret ever passing through the chat.
+ * KEY DROP: enable a secret-gated module (the Serper key for SEO, or a Google Search Console
+ * service-account JSON) LATER, from an LLM conversation, WITHOUT the secret ever passing through
+ * the chat.
  *
  * The flow: the user's LLM calls the mint_key_drop MCP tool -> POST /api/key-drop (authed) mints a
  * single-use, HMAC-signed, 15-minute drop token and a ready-to-run one-liner:
@@ -20,7 +21,7 @@ import type { NextApiRequest } from 'next';
  */
 
 /** The secrets a drop token can set. Extend the enum as more secret-gated modules appear. */
-export const KEY_DROP_SECRETS = ['serper'] as const;
+export const KEY_DROP_SECRETS = ['serper', 'gsc_service_account'] as const;
 export type KeyDropSecret = typeof KEY_DROP_SECRETS[number];
 
 /** How long a minted drop token stays valid. Same 15-minute window the GSC OAuth state uses. */
@@ -31,6 +32,85 @@ export const MAX_DROP_KEY_LENGTH = 512;
 
 /** Hard cap on the raw request stream, so an attacker cannot firehose the raw-body reader. */
 export const MAX_DROP_BODY_BYTES = 8 * 1024;
+
+/**
+ * Per-kind cap on the accepted (trimmed) drop payload. 'serper' keeps the tight 512-char key cap;
+ * 'gsc_service_account' is a whole Google service-account JSON file (~2.4KB, with a PEM key
+ * inside), so its cap is the raw-body cap itself.
+ * @param {KeyDropSecret} secret - The drop kind.
+ * @returns {number} The max accepted payload length in characters.
+ */
+export const maxDropKeyLength = (secret: KeyDropSecret): number => (
+   secret === 'gsc_service_account' ? MAX_DROP_BODY_BYTES : MAX_DROP_KEY_LENGTH
+);
+
+/**
+ * The Google-side walkthrough for getting a service-account JSON, written ONCE here so the mint
+ * response and the knowledge layer surface the same steps (an LLM can guide the user without web
+ * search). Step 5 happens AFTER the drop, using the client_email the consume route confirms.
+ */
+export const GSC_SERVICE_ACCOUNT_SETUP_STEPS = [
+   '1. Go to console.cloud.google.com and create a project (or select an existing one).',
+   '2. Enable the "Google Search Console API" for that project (APIs and Services > Library).',
+   '3. Create a service account (IAM and Admin > Service Accounts > Create). No roles are needed.',
+   '4. Open the service account > Keys > Add Key > Create new key > JSON, and download the .json file.',
+   '5. After you send the file to s33k (the curl command), add the service account\'s email as a user with '
+      + 'Full permission on your property at search.google.com/search-console (Settings > Users and permissions).',
+] as const;
+
+/** The validated identity fields of a dropped service-account JSON, or the plain-text refusal. */
+export type ServiceAccountValidation =
+   | { ok: true, clientEmail: string, privateKey: string }
+   | { ok: false, reason: string };
+
+/**
+ * Validate a dropped Google service-account JSON body BEFORE anything is stored. Pure. Every
+ * refusal is a plain-text reason meant for a human at a terminal, and no refusal ever includes
+ * the body or any key material (the caller must not echo it either).
+ * @param {string} raw - The trimmed request body.
+ * @returns {ServiceAccountValidation}
+ */
+export const validateServiceAccountJson = (raw: string): ServiceAccountValidation => {
+   let parsed: unknown;
+   try {
+      parsed = JSON.parse(raw);
+   } catch {
+      return {
+         ok: false,
+         reason: 'The body is not valid JSON. Send the downloaded service-account .json file itself, '
+            + 'e.g. curl ... --data-binary @service-account.json',
+      };
+   }
+   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, reason: 'The body is not a JSON object. Send the downloaded service-account .json file itself.' };
+   }
+   const obj = parsed as Record<string, unknown>;
+   if (obj.type !== 'service_account') {
+      return {
+         ok: false,
+         reason: 'This JSON is not a service-account key (its "type" is not "service_account"). '
+            + 'In Google Cloud, create a key for a SERVICE ACCOUNT (IAM and Admin > Service Accounts), not an OAuth client.',
+      };
+   }
+   const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
+   // Tight character classes on purpose: the email is echoed into the plain-text confirmation, so
+   // the permissive [^\s@] classes would let control bytes (e.g. ANSI escapes) reach a terminal.
+   if (!clientEmail || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+$/.test(clientEmail)) {
+      return {
+         ok: false,
+         reason: 'The JSON has no usable "client_email". Download a fresh JSON key for the service account and send that file unmodified.',
+      };
+   }
+   const privateKey = typeof obj.private_key === 'string' ? obj.private_key : '';
+   if (!privateKey || !privateKey.includes('BEGIN PRIVATE KEY')) {
+      return {
+         ok: false,
+         reason: 'The JSON has no usable "private_key" (expected a PEM block containing BEGIN PRIVATE KEY). '
+            + 'Download a fresh JSON key for the service account and send that file unmodified.',
+      };
+   }
+   return { ok: true, clientEmail, privateKey };
+};
 
 type KeyDropClaims = { s: KeyDropSecret, n: string, t: number };
 
