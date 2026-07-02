@@ -5,8 +5,8 @@ import { rateLimit } from '../../../utils/rate-limit';
 import { clientIp } from '../../../utils/collect-guards';
 import { getStoredSettings, writeStoredSettings } from '../../../utils/settingsStore';
 import {
-   verifyKeyDropToken, isNonceConsumed, markNonceConsumed, readRawBody,
-   MAX_DROP_BODY_BYTES, MAX_DROP_KEY_LENGTH, KEY_DROP_CONSUMED_FIELD,
+   verifyKeyDropToken, isNonceConsumed, markNonceConsumed, readRawBody, validateServiceAccountJson,
+   maxDropKeyLength, MAX_DROP_BODY_BYTES, KEY_DROP_CONSUMED_FIELD,
 } from '../../../utils/keyDrop';
 
 // POST /api/key-drop/[nonce]: CONSUME a key drop. The user runs the minted curl one-liner and
@@ -70,28 +70,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch {
          return res.status(400).send('Body too large.');
       }
-      // Strip ALL whitespace: stdin paste commonly carries a trailing newline, and a real API key
-      // never contains internal whitespace.
-      const key = raw.replace(/\s+/g, '');
-      if (!key) { return res.status(400).send('Empty body. Paste the key, press Enter, then Ctrl-D.'); }
-      if (key.length > MAX_DROP_KEY_LENGTH) { return res.status(400).send('Key is too long.'); }
 
-      // Save exactly the way pages/api/settings.ts stores it: cryptr-encrypted scaping_api plus a
-      // concrete scraper_type, and burn the nonce durably in the same write (one row, one update).
+      // PER-KIND payload normalization. 'serper' strips ALL whitespace (stdin paste commonly
+      // carries a trailing newline, and a real API key never contains internal whitespace).
+      // 'gsc_service_account' only TRIMS: the body is a whole JSON file whose PEM private_key
+      // depends on its internal whitespace/newlines, so stripping would corrupt it.
+      const key = verified.secret === 'gsc_service_account' ? raw.trim() : raw.replace(/\s+/g, '');
+      if (!key) {
+         return res.status(400).send(verified.secret === 'gsc_service_account'
+            ? 'Empty body. Send the downloaded service-account .json file, e.g. curl ... --data-binary @service-account.json'
+            : 'Empty body. Paste the key, press Enter, then Ctrl-D.');
+      }
+      if (key.length > maxDropKeyLength(verified.secret)) { return res.status(400).send('Key is too long.'); }
+
+      // Save exactly the way pages/api/settings.ts stores its secret fields (cryptr-encrypted into
+      // the settings row), and burn the nonce durably in the same write (one row, one update).
       const cryptr = new Cryptr(process.env.SECRET as string);
       const next: Record<string, any> = {
          ...stored,
          [KEY_DROP_CONSUMED_FIELD]: markNonceConsumed(stored, verified.nonce),
       };
+      // Set by the gsc branch; echoed in the confirmation. The client_email is an IDENTIFIER (the
+      // user must grant it access in Search Console next), never a secret. The private_key and the
+      // raw body are never echoed, on any path.
+      let confirmation = 'Saved. The SEO module is now enabled. '
+         + 'Tell your AI "the key is in" and ask it to refresh your keywords or run start_here.';
       if (verified.secret === 'serper') {
          next.scaping_api = cryptr.encrypt(key);
          next.scraper_type = 'serper';
       }
+      if (verified.secret === 'gsc_service_account') {
+         // Validate BEFORE storing. All refusals are plain-text reasons for a human at a terminal
+         // and never contain the body or the key material. Validation failures do NOT burn the
+         // nonce durably (nothing is written), but the within-process guard above has already
+         // claimed it; erring toward burned is the safe side for a single-use credential.
+         const validated = validateServiceAccountJson(key);
+         if (!validated.ok) {
+            return res.status(400).send(`${validated.reason} Then ask your AI to mint a fresh drop command and retry (each link is single-use).`);
+         }
+         next.search_console_client_email = cryptr.encrypt(validated.clientEmail);
+         next.search_console_private_key = cryptr.encrypt(validated.privateKey);
+         confirmation = `Saved. Search Console credentials are stored for ${validated.clientEmail}. `
+            + `One step left, in Google: add ${validated.clientEmail} as a user with Full permission on your property `
+            + 'at search.google.com/search-console (Settings > Users and permissions), '
+            + 'then ask your AI to run get_insight.';
+      }
       await writeStoredSettings(next);
 
-      // Confirmation only. NEVER echo any part of the key back.
-      return res.status(200).send('Saved. The SEO module is now enabled. '
-         + 'Tell your AI "the key is in" and ask it to refresh your keywords or run start_here.');
+      // Confirmation only. NEVER echo the key/private_key or the raw body back.
+      return res.status(200).send(confirmation);
    } catch (error) {
       console.log('[ERROR] Consuming key drop. ', error);
       // The nonce stays burned in-process on a failed save; the durable marker may not have been

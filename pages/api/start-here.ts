@@ -54,7 +54,7 @@ import {
    analyticsTeaser, seoTeaser, aeoTeaser, TEASER_UNAVAILABLE,
    OnboardingResult, ReadyResult, ModuleStatus,
 } from '../../utils/start-here';
-import { isSeoConfigured } from '../../utils/setupState';
+import { isSeoConfigured, isGscConfigured } from '../../utils/setupState';
 
 type StartHereResponse =
    | { mode: 'no-domain', message: string, error?: string | null }
@@ -125,10 +125,17 @@ const getStartHere = async (req: NextApiRequest, res: NextApiResponse<StartHereR
       // keywords". Fail OPEN to the legacy shape on a settings-read error.
       const seoEnabled = await isSeoConfigured().catch(() => true);
 
+      // Search Console module: connected when any GSC credential resolves (settings/env
+      // service-account pair, or this domain's OAuth token with the OAuth env config). The domain
+      // row is already in hand from the access check, so this costs no extra DB read. Fail toward
+      // not_connected: the module then shows its key-drop enablement path.
+      const domainScBlob = owned ? (owned.get({ plain: true }) as { search_console?: string | null }).search_console : null;
+      const gscConnected = await isGscConfigured(domainScBlob).catch(() => false);
+
       const setup = computeSetupState({
          owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain, seoEnabled,
       });
-      const modules = computeModules({ recentEvents, seoEnabled, keywordCount });
+      const modules = computeModules({ recentEvents, seoEnabled, keywordCount, gscConnected });
 
       // Incomplete setup (including a not-owned/not-added domain): walk the user through INSTALL and
       // preview what each report UNLOCKS, then STOP. Dumping analytics on a half-set-up site is the

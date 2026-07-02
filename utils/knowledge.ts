@@ -24,6 +24,7 @@
  */
 
 import { securityFacts, SecurityFacts } from './securityFacts';
+import { GSC_SERVICE_ACCOUNT_SETUP_STEPS } from './keyDrop';
 
 /** One MCP tool / capability, described so an LLM can answer "what is this and when do I use it?" */
 export type CapabilityEntry = {
@@ -117,9 +118,10 @@ const capabilities: CapabilityEntry[] = [
          + 'action, a curated nextSteps list that always surfaces entry_pages (which pages AI search lands on), striking_distance '
          + '(the quickest SEO wins), and dashboard, plus a ready-to-show rendered tour. Every response also carries a MODULES '
          + 'block: Analytics live once beacon events flow, AI referrals live with analytics, SEO enabled only when a scraper key '
-         + 'is configured (otherwise "not enabled" with the mint_key_drop enablement path). A keyless instance with flowing '
-         + 'analytics is healthy with the SEO module off, not incomplete. Composes existing data; never queries an LLM; never '
-         + 'fails.',
+         + 'is configured (otherwise "not enabled" with the mint_key_drop enablement path), and Search Console connected when a '
+         + 'GSC credential resolves (otherwise "not_connected" with its own mint_key_drop path for a service-account JSON). A '
+         + 'keyless instance with flowing analytics is healthy with the SEO module off, not incomplete. Composes existing data; '
+         + 'never queries an LLM; never fails.',
       whenToUse: 'Use as the very first call when someone connects s33k, does not know where to start, or asks "what should I do?", '
          + '"where do I begin?", "how do I install s33k?", or "give me the most important thing". Prefer it over dashboard for a cold '
          + 'start: it checks setup first, walks install if needed, then shows the 3 reports with your numbers and what to ask.',
@@ -195,8 +197,9 @@ const capabilities: CapabilityEntry[] = [
       category: 'seo',
       title: 'Get Search Console insight',
       description: 'Reads Google Search Console insight for a domain: top pages, top keywords, top countries, and aggregate stats. Once Search Console '
-         + 'is connected (see connect_search_console), this returns the real queries each page actually ranks for, the authoritative answer to '
-         + '"what am I ranking for".',
+         + 'is connected, this returns the real queries each page actually ranks for, the authoritative answer to "what am I ranking for". '
+         + 'The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends a service-account JSON from the '
+         + 'user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
       whenToUse: 'Use for real impression and click data from Google, beyond the keywords you explicitly track. Requires Search Console connected.',
       examplePrompt: 'What are my top Search Console pages for example.com?',
    },
@@ -207,9 +210,12 @@ const capabilities: CapabilityEntry[] = [
       title: 'Connect Google Search Console',
       description: 'Starts the click-to-authorize Google Search Console connection for a domain you own and returns a Google consent link. Approving '
          + 'it lets s33k read your real Search Console data, so get_insight returns the real queries each page ranks for, the authoritative answer '
-         + 'to "what am I ranking for". This replaces pasting a service-account JSON: you just click the link and approve.',
-      whenToUse: 'Use when a user wants their real Google ranking queries, or get_insight reports Search Console is not integrated. Connecting '
-         + 'requires write access to the domain (you must own it). Show the user the returned link to open and approve.',
+         + 'to "what am I ranking for". Requires the instance to have a GSC OAuth app configured. When it does not (most self-hosted installs), '
+         + 'the easiest path is mint_key_drop with secret "gsc_service_account": one curl line sends a Google service-account JSON from the '
+         + 'user\'s own terminal, and the mint response carries the full Google-side walkthrough.',
+      whenToUse: 'Use when a user wants their real Google ranking queries, or get_insight reports Search Console is not integrated, and the '
+         + 'instance has a GSC OAuth app configured. Connecting requires write access to the domain (you must own it). Show the user the '
+         + 'returned link to open and approve. Without an OAuth app, reach for mint_key_drop (secret "gsc_service_account") instead.',
       examplePrompt: 'Connect Google Search Console for example.com.',
    },
    // --- AEO (AI answer-engine visibility) ---
@@ -450,8 +456,9 @@ const capabilities: CapabilityEntry[] = [
          + 'next step and the exact tool to call. The modules block: Analytics is live once beacon events flow (otherwise waiting for the beacon); '
          + 'AI referrals are live with analytics (same beacon, no extra setup); SEO is enabled only when a SERP scraper key is configured, '
          + 'otherwise it reads "not enabled" with the enablement path (ask the LLM to enable SEO, which mints a key-drop command via '
-         + 'mint_key_drop). With SEO off, tracking keywords is not a setup step, so an analytics-only instance with flowing events reads healthy '
-         + 'and complete. It also returns a firstRunHint pointing at the dashboard as the place to start.',
+         + 'mint_key_drop); Search Console is connected when a GSC credential resolves, otherwise "not_connected" with its own mint_key_drop '
+         + 'path for a service-account JSON. With SEO off, tracking keywords is not a setup step, so an analytics-only instance with flowing '
+         + 'events reads healthy and complete. It also returns a firstRunHint pointing at the dashboard as the place to start.',
       whenToUse: 'Use to walk a new user from zero to value step by step, whenever someone asks what to set up next, whether s33k is configured, '
          + 'or which modules are on. When they are set up (or just want the big picture), point them at the dashboard tool for the full overview.',
       examplePrompt: 'Walk me through setting up s33k for example.com, then show me my dashboard.',
@@ -461,15 +468,20 @@ const capabilities: CapabilityEntry[] = [
       toolName: 'mint_key_drop',
       category: 'onboarding',
       title: 'Mint a key-drop command (set a secret without pasting it into chat)',
-      description: 'Enables a secret-gated module (today: SEO via a Serper API key) without the secret ever passing through the conversation. '
-         + 'Returns a single-use, HMAC-signed drop link that expires in 15 minutes, plus a ready-to-run one-liner: '
-         + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`. The user runs it in their own terminal, pastes the key on '
-         + 'stdin, and presses Ctrl-D, so the key never lands in shell history, the chat transcript, or the LLM\'s context. The server saves it '
-         + 'encrypted into the settings row and the confirmation never echoes the key.',
-      whenToUse: 'Use whenever the user wants to enable SEO (or set any supported secret) and the instance has no scraper key configured, and '
-         + 'ALWAYS instead of asking the user to paste an API key into the chat. After they confirm running the command, verify with '
-         + 'setup_status and start tracking keywords.',
-      examplePrompt: 'Enable SEO for my s33k instance. I have a Serper key ready.',
+      description: 'Enables a secret-gated module without the secret ever passing through the conversation. Returns a single-use, HMAC-signed '
+         + 'drop link that expires in 15 minutes, plus a ready-to-run one-liner. Two kinds: "serper" (SEO rank tracking) mints '
+         + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @-`; the user pastes the key on stdin and presses Ctrl-D. '
+         + '"gsc_service_account" (Google Search Console, the easiest connect path) mints '
+         + '`curl -sS -X POST <your-s33k>/api/key-drop/<token> --data-binary @service-account.json`; the user runs it in the folder holding '
+         + 'the service-account JSON downloaded from Google Cloud, and the mint response also carries googleCloudSteps, the full Google-side '
+         + `walkthrough: ${GSC_SERVICE_ACCOUNT_SETUP_STEPS.join(' ')} Either way the secret never lands in shell history, the chat transcript, `
+         + 'or the LLM\'s context. The server validates and saves it encrypted into the settings row; the confirmation never echoes the key '
+         + '(for the GSC kind it confirms only the service-account email, an identifier the user needs for the Search Console grant).',
+      whenToUse: 'Use whenever the user wants to enable SEO (no scraper key configured) or connect Google Search Console (no GSC credential '
+         + 'configured), and ALWAYS instead of asking the user to paste an API key or JSON into the chat. After they confirm running the '
+         + 'command, verify: setup_status for the SEO module, get_insight for Search Console (after the user grants the service-account '
+         + 'email Full permission on the property).',
+      examplePrompt: 'Connect Google Search Console for my s33k instance. I can download the service-account file.',
    },
    {
       id: 'striking_distance',
@@ -1026,7 +1038,10 @@ const setup = {
       + '(raw HTML, Google Tag Manager, WordPress, Webflow, Shopify, Squarespace, Wix, Next.js/React).',
    connectSearchConsole: 'Google Search Console is an optional richer layer, not the first step. It gives real impression '
       + 'and click data (read via get_insight) beyond the keywords you track explicitly. It is connected after first value '
-      + 'because the service-account flow is slower than the Serper-key rank path that onboarding leads with.',
+      + 'because the Google-side setup is slower than the Serper-key rank path that onboarding leads with. The easiest '
+      + 'connect path is the key drop: ask your LLM to mint a key-drop command with secret "gsc_service_account", follow the '
+      + `Google-side steps it returns, and send the downloaded JSON with one curl line. The Google-side steps: ${GSC_SERVICE_ACCOUNT_SETUP_STEPS.join(' ')} `
+      + 'Alternatively, connect_search_console returns a click-to-authorize consent link when the instance has a GSC OAuth app configured.',
    installGuidesSource: 'The exact tracking snippet and per-platform steps come from getInstallGuides(domain, websiteId) in '
       + 'utils/install-guides.ts, surfaced at runtime by the install_instructions capability (GET /api/install-instructions). '
       + 'That library is the single source for install copy; ask install_instructions for the live, domain-specific version.',
@@ -1130,8 +1145,10 @@ const troubleshooting: TroubleshootingEntry[] = [
       id: 'search_console_not_connected',
       problem: 'get_insight returns "Google Search Console is not Integrated".',
       resolution: 'get_insight needs Google Search Console connected for that domain. It is an optional level-2 layer, not '
-         + 'part of the fast onboarding path. Connect Search Console in s33k for the domain, then get_insight returns real '
-         + 'impression and click data.',
+         + 'part of the fast onboarding path. The easiest fix: ask your LLM to mint a key-drop command with secret '
+         + '"gsc_service_account", follow the Google Cloud steps it returns, send the downloaded service-account JSON with the '
+         + 'one curl line, and grant the confirmed service-account email Full permission on the property in Search Console. '
+         + 'Then get_insight returns real impression and click data.',
    },
 ];
 

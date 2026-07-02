@@ -206,6 +206,54 @@ export const isSeoConfigured = async (): Promise<boolean> => {
 };
 
 /**
+ * Search Console module configuration check, pure half. Mirrors the credential resolution of
+ * getSearchConsoleApiInfo (utils/searchConsole.ts), as PRESENCE checks (encrypted values count,
+ * nothing is decrypted here):
+ *   1. the per-domain search_console blob: a service-account pair, or a click-to-authorize OAuth
+ *      refresh_token (usable only when the GSC_OAUTH_CLIENT_ID/SECRET env pair exists, because the
+ *      read path builds its OAuth2Client from those);
+ *   2. the stored settings fields search_console_client_email + search_console_private_key (the
+ *      pair the gsc_service_account key drop fills);
+ *   3. the env pair SEARCH_CONSOLE_CLIENT_EMAIL + SEARCH_CONSOLE_PRIVATE_KEY.
+ * The domain blob is optional: callers without a Domain row in hand (or on a parse error) still
+ * get the settings+env answer, which covers the instance-level credential paths.
+ * @param {Record<string, any>} stored - The raw stored settings blob (fields still encrypted).
+ * @param {NodeJS.ProcessEnv} env - The process env (injectable for tests).
+ * @param {string | null} [domainScBlob] - The domain's raw search_console JSON blob, when available.
+ * @returns {boolean} True when a Search Console credential resolves.
+ */
+export const computeGscConfigured = (stored: Record<string, any>, env: NodeJS.ProcessEnv, domainScBlob?: string | null): boolean => {
+   if (domainScBlob) {
+      try {
+         const blob = JSON.parse(domainScBlob);
+         if (blob && typeof blob === 'object') {
+            if (typeof blob.private_key === 'string' && blob.private_key.trim() !== ''
+               && typeof blob.client_email === 'string' && blob.client_email.trim() !== '') { return true; }
+            const oauthEnvReady = (env.GSC_OAUTH_CLIENT_ID || '').trim() !== '' && (env.GSC_OAUTH_CLIENT_SECRET || '').trim() !== '';
+            if (oauthEnvReady && typeof blob.oauth_refresh_token === 'string' && blob.oauth_refresh_token.trim() !== '') { return true; }
+         }
+      } catch (error) {
+         // A malformed blob answers from settings+env below, never throws the walkthrough.
+      }
+   }
+   const storedEmail = typeof stored.search_console_client_email === 'string' ? stored.search_console_client_email.trim() : '';
+   const storedKey = typeof stored.search_console_private_key === 'string' ? stored.search_console_private_key.trim() : '';
+   if (storedEmail && storedKey) { return true; }
+   return (env.SEARCH_CONSOLE_CLIENT_EMAIL || '').trim() !== '' && (env.SEARCH_CONSOLE_PRIVATE_KEY || '').trim() !== '';
+};
+
+/**
+ * Is the Search Console module connected (any credential resolves) for this instance, optionally
+ * considering one domain's per-domain blob?
+ * @param {string | null} [domainScBlob] - The domain's raw search_console JSON blob, when available.
+ * @returns {Promise<boolean>}
+ */
+export const isGscConfigured = async (domainScBlob?: string | null): Promise<boolean> => {
+   const stored = await getStoredSettings();
+   return computeGscConfigured(stored, process.env, domainScBlob);
+};
+
+/**
  * Print the first-run setup log line, at most once per process, and only while setup is
  * incomplete. Called fire-and-forget from the boot hook (see database/database.ts ensureSynced).
  * Never throws: a failed settings read just skips the announce (the next boot retries).

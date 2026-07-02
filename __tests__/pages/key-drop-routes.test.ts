@@ -128,6 +128,31 @@ describe('POST /api/key-drop (mint)', () => {
       await mintHandler(makeMintReq({ secret: 'stripe' }), res);
       expect(res.statusCode).toBe(400);
    });
+
+   it('mints a gsc_service_account token with an explicit file-piping one-liner + the Google walkthrough', async () => {
+      const res = makeRes();
+      await mintHandler(makeMintReq({ secret: 'gsc_service_account' }), res);
+      expect(res.statusCode).toBe(200);
+      const verified = verifyKeyDropToken(res.payload.token);
+      expect(verified).not.toBe(false);
+      expect((verified as { secret: string }).secret).toBe('gsc_service_account');
+      expect(res.payload.command).toBe(
+         `curl -sS -X POST https://s33k.example.com/api/key-drop/${res.payload.token} --data-binary @service-account.json`,
+      );
+      // The mint response carries the 5-step Google Cloud walkthrough so the LLM can guide the
+      // user without web search.
+      expect(res.payload.googleCloudSteps).toHaveLength(5);
+      expect(res.payload.googleCloudSteps.join(' ')).toContain('console.cloud.google.com');
+      expect(res.payload.googleCloudSteps.join(' ')).toContain('search.google.com/search-console');
+      expect(res.payload.instructions).toContain('search.google.com/search-console');
+   });
+
+   it('the serper mint carries no Google walkthrough', async () => {
+      const res = makeRes();
+      await mintHandler(makeMintReq({ secret: 'serper' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(res.payload.googleCloudSteps).toBeUndefined();
+   });
 });
 
 describe('POST /api/key-drop/[nonce] (consume)', () => {
@@ -209,6 +234,15 @@ describe('POST /api/key-drop/[nonce] (consume)', () => {
       expect(res.statusCode).toBe(404);
    });
 
+   it('serper stripping is intact: internal whitespace is removed, not preserved', async () => {
+      const token = signKeyDropToken('serper');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, ['  my-key\n-with-newline  \n']), res);
+      expect(res.statusCode).toBe(200);
+      const written = mockWrite.mock.calls[0][0];
+      expect(new Cryptr(process.env.SECRET as string).decrypt(written.scaping_api)).toBe('my-key-with-newline');
+   });
+
    it('rate-limits a flood from one IP', async () => {
       const ip = '198.51.100.250';
       for (let i = 0; i < 10; i += 1) {
@@ -218,5 +252,123 @@ describe('POST /api/key-drop/[nonce] (consume)', () => {
       const blocked = makeRes();
       await consumeHandler(makeConsumeReq(signKeyDropToken('serper'), ['k'], ip), blocked);
       expect(blocked.statusCode).toBe(429);
+   });
+});
+
+describe('POST /api/key-drop/[nonce] (consume, gsc_service_account kind)', () => {
+   // A realistic (fake) Google service-account key file. The PEM's internal newlines are the
+   // whole point of the trim-only rule: stripping them would corrupt the key.
+   const FAKE_PEM = '-----BEGIN PRIVATE KEY-----\nMIIEfakeLINEone\nMIIEfakeLINEtwo\n-----END PRIVATE KEY-----\n';
+   const SA_EMAIL = 's33k-reader@test-project.iam.gserviceaccount.com';
+   const saJson = (overrides: Record<string, unknown> = {}) => JSON.stringify({
+      type: 'service_account',
+      project_id: 'test-project',
+      private_key_id: 'abc123',
+      private_key: FAKE_PEM,
+      client_email: SA_EMAIL,
+      client_id: '123456789',
+      ...overrides,
+   });
+
+   it('stores BOTH fields encrypted (round-trip proven), echoes the client_email, never the key material', async () => {
+      mockRead.mockResolvedValue({ some_field: 'kept' });
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, [`${saJson()}\n`]), res);
+      expect(res.statusCode).toBe(200);
+
+      const written = mockWrite.mock.calls[0][0];
+      expect(written.some_field).toBe('kept');
+      // Encrypted at rest, exactly like pages/api/settings.ts stores these fields.
+      const cryptr = new Cryptr(process.env.SECRET as string);
+      expect(written.search_console_client_email).not.toContain(SA_EMAIL);
+      expect(cryptr.decrypt(written.search_console_client_email)).toBe(SA_EMAIL);
+      expect(written.search_console_private_key).not.toContain('BEGIN PRIVATE KEY');
+      // Trim-only: the PEM's internal newlines survive the drop byte-for-byte.
+      expect(cryptr.decrypt(written.search_console_private_key)).toBe(FAKE_PEM);
+      // The serper fields are untouched by this kind.
+      expect(written.scaping_api).toBeUndefined();
+      expect(written.scraper_type).toBeUndefined();
+      // Nonce burned durably in the same write.
+      const nonce = (verifyKeyDropToken(token) as { nonce: string }).nonce;
+      expect(written[KEY_DROP_CONSUMED_FIELD][nonce]).toEqual(expect.any(Number));
+
+      // The confirmation carries the client_email (an identifier the user needs for the Search
+      // Console grant) and the grant instruction, and NEVER any private-key material.
+      const body = String(res.payload);
+      expect(body).toContain(SA_EMAIL);
+      expect(body).toContain('search.google.com/search-console');
+      expect(body).toContain('get_insight');
+      expect(body).not.toContain('BEGIN PRIVATE KEY');
+      expect(body).not.toContain('MIIEfakeLINEone');
+   });
+
+   it('400s a body that is not JSON, without saving, without echoing the body', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, ['this-is-a-serper-style-paste']), res);
+      expect(res.statusCode).toBe(400);
+      expect(mockWrite).not.toHaveBeenCalled();
+      expect(String(res.payload)).toContain('not valid JSON');
+      expect(String(res.payload)).not.toContain('this-is-a-serper-style-paste');
+   });
+
+   it('400s JSON whose type is not service_account (e.g. an OAuth client file)', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, [saJson({ type: 'authorized_user' })]), res);
+      expect(res.statusCode).toBe(400);
+      expect(mockWrite).not.toHaveBeenCalled();
+      expect(String(res.payload)).toContain('service_account');
+   });
+
+   it('400s a missing/invalid client_email', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, [saJson({ client_email: 'not-an-email' })]), res);
+      expect(res.statusCode).toBe(400);
+      expect(mockWrite).not.toHaveBeenCalled();
+      expect(String(res.payload)).toContain('client_email');
+   });
+
+   it('400s a missing/non-PEM private_key, and never echoes what was sent', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, [saJson({ private_key: 'sk-plain-secret-value' })]), res);
+      expect(res.statusCode).toBe(400);
+      expect(mockWrite).not.toHaveBeenCalled();
+      expect(String(res.payload)).toContain('private_key');
+      expect(String(res.payload)).not.toContain('sk-plain-secret-value');
+   });
+
+   it('400s an oversized body (larger than the raw-body cap)', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, ['x'.repeat(9 * 1024)]), res);
+      expect(res.statusCode).toBe(400);
+      expect(mockWrite).not.toHaveBeenCalled();
+   });
+
+   it('accepts a real-sized (~2.4KB) service-account file: the per-kind cap is the body cap, not 512', async () => {
+      // Pad the PEM so the whole JSON clears 512 chars by a wide margin (the serper cap would
+      // reject this) while staying under the 8KB body cap.
+      const bigPem = `-----BEGIN PRIVATE KEY-----\n${'MIIEfakeBODY0123456789\n'.repeat(90)}-----END PRIVATE KEY-----\n`;
+      const payload = saJson({ private_key: bigPem });
+      expect(payload.length).toBeGreaterThan(2000);
+      const token = signKeyDropToken('gsc_service_account');
+      const res = makeRes();
+      await consumeHandler(makeConsumeReq(token, [payload]), res);
+      expect(res.statusCode).toBe(200);
+   });
+
+   it('404s a replayed gsc nonce after a successful drop', async () => {
+      const token = signKeyDropToken('gsc_service_account');
+      const first = makeRes();
+      await consumeHandler(makeConsumeReq(token, [saJson()]), first);
+      expect(first.statusCode).toBe(200);
+      const replay = makeRes();
+      await consumeHandler(makeConsumeReq(token, [saJson()]), replay);
+      expect(replay.statusCode).toBe(404);
+      expect(mockWrite).toHaveBeenCalledTimes(1);
    });
 });

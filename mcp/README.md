@@ -51,7 +51,7 @@ The server registers 73 tools and 5 knowledge resources, grouped by pillar. s33k
 | `cannibalization_detection` | Finds keyword cannibalization where two of your own pages compete for the same term and split the equity. | `domain` |
 | `content_gap` | Crawls a named competitor and your site and returns the topics the competitor covers that you do not. | `domain`, `competitor` |
 | `competitor_visibility` | Reads the stored SERP for every tracked keyword and tallies competitor share of voice, plus who outranks you per keyword. | `domain` |
-| `get_insight` | Reads Google Search Console insight (top pages, keywords, countries, stats). Requires GSC connected for that domain. | `domain` |
+| `get_insight` | Reads Google Search Console insight (top pages, keywords, countries, stats). Requires GSC connected; the easiest connect path is `mint_key_drop` with secret `gsc_service_account`. | `domain` |
 
 ### AEO
 
@@ -105,7 +105,8 @@ The server registers 73 tools and 5 knowledge resources, grouped by pillar. s33k
 | `list_domains` | Lists all domains tracked in s33k. | none |
 | `create_domain` | Adds one or more domains to track (bare hostnames, no protocol). A write, so it needs a full-account key; read-only share keys are rejected at the API. | `domains` |
 | `onboard` | The one-call cold start: creates the domain, discovers and adds keywords with scrapes queued, provisions analytics, and returns the snippet plus guides. A write, so it needs a full-account key. | `domain` |
-| `setup_status` | Reports a domain's setup progress as a checklist with the single next step and the exact tool to call. | `domain` |
+| `setup_status` | Reports a domain's setup progress as a checklist with the single next step and the exact tool to call, plus the modules block (Analytics, AI referrals, SEO, Search Console). | `domain` |
+| `mint_key_drop` | Mints a single-use, signed curl one-liner so a secret reaches the server from the user's own terminal, never the chat. `serper` enables SEO rank tracking (paste the key on stdin); `gsc_service_account` connects Google Search Console from a downloaded service-account JSON file (`--data-binary @service-account.json`) and the response carries the Google-side setup steps. | `secret` (optional, `serper` or `gsc_service_account`) |
 | `install_instructions` | Returns the tracking snippet and per-platform install steps (WordPress, Webflow, Shopify, GTM, Next.js, raw HTML, and more). | `domain`, `platform` (optional) |
 
 ### Account, trust, and self-support

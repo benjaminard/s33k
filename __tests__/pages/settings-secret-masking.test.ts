@@ -100,6 +100,26 @@ describe('GET /api/settings masks every stored secret', () => {
       expect(JSON.stringify(res.payload)).not.toContain(PLAINTEXT_KEY);
    });
 
+   it('masks the Search Console service-account fields the gsc_service_account key drop fills', async () => {
+      const cryptr = new Cryptr(TEST_SECRET);
+      const saEmail = 's33k-reader@test-project.iam.gserviceaccount.com';
+      const saKey = '-----BEGIN PRIVATE KEY-----\nMIIEfake\n-----END PRIVATE KEY-----\n';
+      mockGetStored.mockResolvedValue({
+         search_console_client_email: cryptr.encrypt(saEmail),
+         search_console_private_key: cryptr.encrypt(saKey),
+      });
+
+      const res = makeRes();
+      await settingsHandler(makeReq(), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.payload.settings?.search_console_client_email).toBe(SECRET_MASK);
+      expect(res.payload.settings?.search_console_private_key).toBe(SECRET_MASK);
+      const raw = JSON.stringify(res.payload);
+      expect(raw).not.toContain(saEmail);
+      expect(raw).not.toContain('BEGIN PRIVATE KEY');
+   });
+
    it('leaves an unset secret as empty string, so set and unset stay distinguishable', async () => {
       const res = makeRes();
       await settingsHandler(makeReq(), res);

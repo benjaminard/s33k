@@ -5,7 +5,7 @@ import authorize from '../../utils/authorize';
 import { scopeWhere } from '../../utils/scope';
 import resolveDomainAccess from '../../utils/domain-access';
 import { computeSetupState, computeModules, ModuleStatus } from '../../utils/start-here';
-import { isSeoConfigured } from '../../utils/setupState';
+import { isSeoConfigured, isGscConfigured } from '../../utils/setupState';
 import Domain from '../../database/models/domain';
 import Keyword from '../../database/models/keyword';
 import S33kEvent from '../../database/models/s33kEvent';
@@ -72,13 +72,20 @@ const getStatus = async (req: NextApiRequest, res: NextApiResponse<Resp>, accoun
       // shape on a settings-read error, never 500 the walkthrough.
       const seoEnabled = await isSeoConfigured().catch(() => true);
 
+      // Search Console module: connected when any GSC credential resolves (settings/env
+      // service-account pair, or this domain's OAuth token with the OAuth env config). The
+      // domain's search_console blob is already in hand from the access check, so this costs no
+      // extra DB read. Fail toward not_connected: the module then shows its enablement path.
+      const domainScBlob = owned ? (owned.get({ plain: true }) as { search_console?: string | null }).search_console : null;
+      const gscConnected = await isGscConfigured(domainScBlob).catch(() => false);
+
       // The setup steps + percentComplete + nextStep are computed by the SHARED
       // computeSetupState (utils/start-here.ts), the single source of truth, so setup_status and
       // start_here can never disagree about where a user is in setup.
       const { steps, percentComplete, nextStep } = computeSetupState({
          owned: Boolean(owned), keywordCount, recentEvents, goalCount, domain, keywordsRankPending, seoEnabled,
       });
-      const modules = computeModules({ recentEvents, seoEnabled, keywordCount });
+      const modules = computeModules({ recentEvents, seoEnabled, keywordCount, gscConnected });
 
       // Always point at the dashboard as the place to start. When setup is complete this is the
       // headline next move; when it is not, it is the closing hint so a brand-new user always
