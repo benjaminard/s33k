@@ -64,6 +64,9 @@ const daysAgoKey = (days: number): string => {
  * parseKeywords JSON.parses history/tags/lastResult, so those must be strings.
  * `history` maps a recent date (in the current window) and an older date (in the
  * prior window) to positions, so positionInWindow resolves a current vs prior rank.
+ * `rawHistory`, when supplied, replaces the curPos/priorPos-derived map entirely,
+ * for tests that need history entries outside the standard day-1/day-10 spots
+ * (e.g. sparse, weekly-cadence scrape gaps).
  */
 const keywordRow = (overrides: {
    keyword: string,
@@ -71,11 +74,16 @@ const keywordRow = (overrides: {
    curPos?: number,
    priorPos?: number,
    lastResult?: { position: number, url: string, title?: string }[],
+   rawHistory?: Record<string, number>,
 }) => {
-   const history: Record<string, number> = {};
-   // 7d default period: current window is the last 7 days, prior is days 7-14.
-   if (overrides.curPos !== undefined) { history[daysAgoKey(1)] = overrides.curPos; }
-   if (overrides.priorPos !== undefined) { history[daysAgoKey(10)] = overrides.priorPos; }
+   let history: Record<string, number> = {};
+   if (overrides.rawHistory) {
+      history = overrides.rawHistory;
+   } else {
+      // 7d default period: current window is the last 7 days, prior is days 7-14.
+      if (overrides.curPos !== undefined) { history[daysAgoKey(1)] = overrides.curPos; }
+      if (overrides.priorPos !== undefined) { history[daysAgoKey(10)] = overrides.priorPos; }
+   }
    const plain = {
       ID: 1,
       keyword: overrides.keyword,
@@ -535,5 +543,88 @@ describe('alerts route: SERP context on rank alerts', () => {
       expect(captured.status).toBe(200);
       const rank = captured.body.alerts.find((a: any) => a.pillar === 'rank');
       expect(rank.context).toEqual({ keyword: 'masset', priorPosition: 4, currentPosition: 12 });
+   });
+});
+
+describe('alerts route: sparse (e.g. weekly) scrape history does not overstate novelty or miss drops', () => {
+   it('does NOT report a long-held #1 keyword as newly ranking just because the 7d prior window has no scrape', async () => {
+      // Only ONE scrape ever, 20 days ago (well outside the 7-14 day prior window a
+      // fixed-width lookup would check), holding #1. A same-day-ish scrape landed
+      // yesterday, still #1: nothing actually changed.
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({
+            keyword: 'masset',
+            target_page: '/',
+            rawHistory: { [daysAgoKey(20)]: 1, [daysAgoKey(1)]: 1 },
+         }),
+      ]);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.alerts.find((a: any) => a.pillar === 'rank')).toBeUndefined();
+   });
+
+   it('flags a HIGH drop-off for a ranked keyword that fell off the top 100, even with a sparse prior window', async () => {
+      // Ranked #9 20 days ago (outside the 7-14 day prior window); a real scrape
+      // yesterday confirms it is now unranked (position 0). The prior comparison
+      // point must carry forward to the #9 scrape, not read as "no data".
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({
+            keyword: 'senior-living',
+            target_page: '/for/senior-living',
+            rawHistory: { [daysAgoKey(20)]: 9, [daysAgoKey(1)]: 0 },
+         }),
+      ]);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const rank = captured.body.alerts.find((a: any) => a.pillar === 'rank');
+      expect(rank).toBeDefined();
+      expect(rank.severity).toBe('high');
+      expect(rank.headline).toMatch(/dropped off/i);
+   });
+
+   it('reports a genuinely brand-new keyword honestly as "first scrape data", not "started ranking"', async () => {
+      // The ONLY scrape ever is inside the current window: no earlier scrape exists
+      // at all, so this is a first data point, not a confirmed novel ranking.
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({
+            keyword: 'brand new term',
+            target_page: '/new',
+            rawHistory: { [daysAgoKey(1)]: 7 },
+         }),
+      ]);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      const rank = captured.body.alerts.find((a: any) => a.pillar === 'rank');
+      expect(rank).toBeDefined();
+      expect(rank.severity).toBe('low');
+      expect(rank.headline).toMatch(/first scrape data/i);
+      expect(rank.headline).not.toMatch(/started ranking/i);
+   });
+
+   it('stays silent rather than inventing a drop when the CURRENT window has no scrape yet', async () => {
+      // Ranked #6 20 days ago; NO scrape at all has landed in the current 7d window,
+      // so we genuinely do not know the current status and must not fabricate a drop.
+      mockedKeywordFindAll.mockResolvedValue([
+         keywordRow({
+            keyword: 'funeral-homes',
+            target_page: '/for/funeral-homes',
+            rawHistory: { [daysAgoKey(20)]: 6 },
+         }),
+      ]);
+
+      const { req, res, captured } = makeReqRes({ domain: 'getmasset.com', period: '7d' });
+      await handler(req, res);
+
+      expect(captured.status).toBe(200);
+      expect(captured.body.alerts.find((a: any) => a.pillar === 'rank')).toBeUndefined();
    });
 });

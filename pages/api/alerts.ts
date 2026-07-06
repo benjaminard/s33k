@@ -68,9 +68,12 @@ import {
  *   - Additive provider totals (traffic, per-engine AI referral visitors) are
  *     fetched for the current window AND a doubled window, and prior = doubled
  *     minus current. Exact for additive quantities.
- *   - The DB-backed pillars this route queries directly (conversions via
- *     s33k_event, rank via Keyword history) use an explicit [priorStart, priorEnd)
- *     window, so those priors are exact too.
+ *   - CONVERSIONS (s33k_event) use an explicit [priorStart, curStart) window.
+ *   - RANK (Keyword history) uses positionAsOf(curStart): the most recent scrape
+ *     strictly before curStart, from ANY point in history, not a fixed-width
+ *     window. A sparse (e.g. weekly) scrape cadence often leaves the equal-length
+ *     prior window empty even though an older scrape exists; see positionAsOf's
+ *     doc comment for the honesty bugs a window-bound prior caused.
  */
 
 type AlertsResponse = {
@@ -259,6 +262,35 @@ const positionInWindow = (history: KeywordHistory, start: number, end: number): 
    return bestPos;
 };
 
+/**
+ * Resolve a keyword's PRIOR position as of a cutoff: the most recent scrape
+ * strictly before it, from ANY point in history, not just a fixed-width window.
+ * With a sparse (e.g. weekly) scrape cadence, the equal-length prior window
+ * `positionInWindow` checks often has no scrape at all even though an older one
+ * exists; carrying forward the last known position avoids two honesty bugs at
+ * once: (1) a keyword ranked for months reads as "started ranking" purely because
+ * its prior window happened to miss a scrape, and (2) a real ranked-to-absent
+ * drop is missed because the prior comparison point looks like "no data" instead
+ * of a genuine prior rank. Returns null only when NO scrape exists before cutoff
+ * at all, which is the honest signal for "never measured, not confirmed absent".
+ * @param {KeywordHistory} history - date-keyed positions (keys like "2026-1-5").
+ * @param {number} cutoff - the boundary (ms); the latest entry strictly before it wins.
+ * @returns {number | null} The most recent position before cutoff, or null if none exists.
+ */
+const positionAsOf = (history: KeywordHistory, cutoff: number): number | null => {
+   let bestTime = -1;
+   let bestPos: number | null = null;
+   Object.keys(history || {}).forEach((dateKey) => {
+      const t = new Date(dateKey).getTime();
+      if (Number.isNaN(t) || t >= cutoff) { return; }
+      if (t > bestTime) {
+         bestTime = t;
+         bestPos = history[dateKey];
+      }
+   });
+   return bestPos;
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse<AlertsResponse>) {
    await ensureSynced();
    const { authorized, account, error } = await authorize(req, res);
@@ -382,12 +414,21 @@ const getAlerts = async (req: NextApiRequest, res: NextApiResponse<AlertsRespons
          const above = kw.position > 0
             ? domainsAboveOnSerp(Array.isArray(kw.lastResult) ? kw.lastResult : [], kw.position, domain)
             : [];
+         const curPos = positionInWindow(kw.history, curStart, now);
+         // Prior uses positionAsOf (carry-forward), not a fixed prior window: see the
+         // positionAsOf doc comment for why a window-bound prior misreads sparse history.
+         const beforePos = positionAsOf(kw.history, curStart);
          currentKeywords.push({
             ...base,
-            position: positionInWindow(kw.history, curStart, now),
+            position: curPos,
             ...(above.length > 0 ? { serpDomainsAbove: above } : {}),
+            ...(curPos === null ? { measured: false } : {}),
          });
-         priorKeywords.push({ ...base, position: positionInWindow(kw.history, priorStart, curStart) });
+         priorKeywords.push({
+            ...base,
+            position: beforePos,
+            ...(beforePos === null ? { measured: false } : {}),
+         });
       });
       const anyRankHistory = keywords.some((kw) => Object.keys(kw.history || {}).length > 0);
       const rankNote = rankAvailabilityNote(keywords.length, anyRankHistory);
