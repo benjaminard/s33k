@@ -45,6 +45,10 @@ const makeRes = () => {
 
 beforeEach(() => {
    jest.clearAllMocks();
+   // The fixtures use fixed June-2026 dates but the route windows from Date.now() (its single clock
+   // read). Pin the clock inside the fixture era, or the suite is a time bomb: it first went red on
+   // 2026-07-06, when the 30d window slid past the earliest fixture session.
+   jest.spyOn(Date, 'now').mockReturnValue(new Date('2026-06-20T12:00:00Z').getTime());
    mockAuthorize.mockResolvedValue({ authorized: true, account: null, error: undefined });
    mockDomain.findOne.mockResolvedValue(row({ ID: 1, domain: 'getmasset.com' }));
    // Keyword targets /pricing; history mixes the OLD non-padded key and the new ISO key, a rank gain.
@@ -58,6 +62,10 @@ beforeEach(() => {
       (d, i) => sessions.push(pv(`a${i}`, '/pricing', `${d}T12:00:00Z`)),
    );
    mockEvent.findAll.mockResolvedValue(sessions);
+});
+
+afterAll(() => {
+   jest.restoreAllMocks();
 });
 
 describe('GET /api/causal-links', () => {
