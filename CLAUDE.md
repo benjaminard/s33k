@@ -156,10 +156,15 @@ open-source repo, not an internal ops doc.
   ensureSynced() success per process prints `[SETUP] Open <base>/setup?token=... to finish setup.`
   (Next 12 pages-router standalone has NO app-level boot hook: no instrumentation.ts, and
   next.config.js is serialized, not executed, in standalone output, so first-ensureSynced-caller is
-  the earliest once-per-process app code. The line therefore prints on the first request the
-  process serves, e.g. a healthcheck.) The token is >= 32 bytes, memory-only, regenerated each
-  boot, constant-time-compared, and dead forever once setup completes. GET /setup and POST
-  /api/setup are TOKEN-AUTHED PUBLIC routes (the GSC-callback pattern): NOT in allowedApiRoutes.
+  the earliest once-per-process app code. `/` is rewritten to the DB-free `/api/root` (see below),
+  and the docker-compose/render.yaml healthcheck probes exactly that route, so `/api/root` itself
+  awaits ensureSynced() before responding: that is what TRIGGERS the boot hook on the healthcheck
+  hit rather than relying on the healthcheck to reach a DB-touching route by accident. The line
+  itself prints a few microtask turns later (the announce runs detached off the sync promise to
+  avoid a recursive deadlock through getStoredSettings), well inside a healthcheck's polling
+  interval.) The token is >= 32 bytes, memory-only, regenerated each boot, constant-time-compared, and dead
+  forever once setup completes. GET /setup and POST /api/setup are TOKEN-AUTHED PUBLIC routes (the
+  GSC-callback pattern): NOT in allowedApiRoutes.
 - **BACKFILL RULE (do not regress):** an instance with meaningful stored settings (scraper key,
   smtp, GSC/adwords creds, non-'none' scraper_type) or an env-configured scraper counts as setup
   COMPLETED even without the `setup_completed` flag, so every pre-existing install (including the
