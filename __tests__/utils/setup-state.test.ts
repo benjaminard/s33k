@@ -6,7 +6,8 @@
  *   - the BACKFILL rule: an existing install (settings present, no setup_completed flag) must be
  *     treated as ALREADY COMPLETED so it never sees the setup page, while a truly fresh install
  *     (empty blob) is not;
- *   - env-configured installs (Serper key/type via env) also count as completed;
+ *   - env-configured installs (a Serper KEY via env) also count as completed; SCRAPER_TYPE alone
+ *     does not, since docker-compose.yml/setup-env.sh default it to 'serper' with no key;
  *   - the SEO-module configuration check (computeSeoConfigured), the gate behind modular status;
  *   - the boot announce: prints exactly one [SETUP] line, only while setup is incomplete.
  *
@@ -126,8 +127,14 @@ describe('isSetupCompleted (flag OR backfill OR env-configured)', () => {
       await expect(isSetupCompleted()).resolves.toBe(true);
    });
 
-   it('an env-configured scraper type counts as completed', async () => {
+   it('a keyless env-configured scraper type is NOT completed (the docker-compose/setup-env.sh default)', async () => {
       process.env.SCRAPER_TYPE = 'serper';
+      await expect(isSetupCompleted()).resolves.toBe(false);
+   });
+
+   it('an env-configured scraper type PLUS a key counts as completed', async () => {
+      process.env.SCRAPER_TYPE = 'serper';
+      process.env.SERPER_API_KEY = 'env-key';
       await expect(isSetupCompleted()).resolves.toBe(true);
    });
 
