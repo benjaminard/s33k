@@ -2320,7 +2320,7 @@ server.registerTool(
    {
       title: 'Update keyword',
       description:
-         'Update one or more tracked keywords by ID. Use this to set a keyword\'s target_page (the page that should rank for it) so it joins correctly in page_scoreboard, or to toggle its sticky pin. Get the IDs from list_keywords first. Exactly one of target_page or sticky is applied per call, and target_page takes precedence if both are given. The response returns each updated keyword in compact form: serpTop (top 3 ranked results: position, url, title) plus serpResultCount instead of the raw 100-position SERP array.',
+         'Update one or more tracked keywords by ID. Use this to set a keyword\'s target_page (the page that should rank for it) so it joins correctly in page_scoreboard, or to toggle its sticky pin. Get the IDs from list_keywords first. target_page and sticky touch different columns, so passing both applies both in the same call. The response returns each updated keyword in compact form: serpTop (top 3 ranked results: position, url, title) plus serpResultCount instead of the raw 100-position SERP array.',
       inputSchema: {
          ids: z
             .array(z.number().int())
@@ -2333,7 +2333,7 @@ server.registerTool(
          sticky: z
             .boolean()
             .optional()
-            .describe('Whether to pin the keyword as sticky. Applied only when target_page is not provided.'),
+            .describe('Whether to pin the keyword as sticky. Applied together with target_page when both are given.'),
       },
    },
    async ({ ids, target_page, sticky }) => {
@@ -2344,7 +2344,8 @@ server.registerTool(
          const body: Record<string, unknown> = {};
          if (target_page !== undefined) {
             body.target_page = target_page;
-         } else if (sticky !== undefined) {
+         }
+         if (sticky !== undefined) {
             body.sticky = sticky;
          }
          const data = await s33kFetch('/api/keywords', {

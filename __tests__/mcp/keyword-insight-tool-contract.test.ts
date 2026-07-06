@@ -7,7 +7,9 @@
  *   1. add_keyword FORWARDS target_page into the POST /api/keywords body. A schema-documented
  *      argument must reach the route; this is the regression guard for the silently-dropped-arg
  *      class of defect.
- *   2. update_keyword forwards target_page in the PUT body with the ids in the query.
+ *   2. update_keyword forwards target_page in the PUT body with the ids in the query, and forwards
+ *      BOTH target_page and sticky in the same call when both are given (issue #20: precedence-by-
+ *      silent-drop is the same defect class as the silently-stripped argument this file already guards).
  *   3. get_insight forwards its new limit/detail params as query params, and sends neither when
  *      omitted (the bounded default).
  */
@@ -59,6 +61,19 @@ describe('MCP tool contract: schema-documented arguments reach the API', () => {
          expect(calls[0].options?.method).toBe('PUT');
          expect(calls[0].options?.query).toEqual({ id: '42' });
          expect(calls[0].options?.body).toEqual({ target_page: '/new' });
+      } finally {
+         await close();
+      }
+   });
+
+   it('update_keyword forwards both target_page and sticky in one call when both are given', async () => {
+      const { calls, client, close } = await setup();
+      try {
+         await client.callTool({ name: 'update_keyword', arguments: { ids: [42], target_page: '/new', sticky: true } });
+         expect(calls[0].path).toBe('/api/keywords');
+         expect(calls[0].options?.method).toBe('PUT');
+         expect(calls[0].options?.query).toEqual({ id: '42' });
+         expect(calls[0].options?.body).toEqual({ target_page: '/new', sticky: true });
       } finally {
          await close();
       }

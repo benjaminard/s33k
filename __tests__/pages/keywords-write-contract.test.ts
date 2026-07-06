@@ -188,6 +188,14 @@ describe('PUT /api/keywords: compact response, no 100-position SERP echo', () =>
       expect(res.body.keywords[0].serpResultCount).toBe(10);
    });
 
+   it('applies both target_page and sticky in one call when both are given (issue #20: no silent drop)', async () => {
+      const res = makeRes();
+      await handler(makeReq({ method: 'PUT', query: { id: '42' }, body: { target_page: ' /new ', sticky: true } }), res);
+      expect(res.statusCode).toBe(200);
+      expect(mockKeyword.update).toHaveBeenCalledTimes(1);
+      expect(mockKeyword.update).toHaveBeenCalledWith({ target_page: '/new', sticky: true }, expect.anything());
+   });
+
    it('rejects a non-string target_page with 400', async () => {
       const res = makeRes();
       await handler(makeReq({ method: 'PUT', query: { id: '42' }, body: { target_page: 7 } }), res);
