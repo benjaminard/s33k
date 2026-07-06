@@ -170,8 +170,9 @@ const capabilities: CapabilityEntry[] = [
       toolName: 'update_keyword',
       category: 'seo',
       title: 'Update keyword',
-      description: 'Updates tracked keywords by ID: set the target_page that should rank for them, or toggle the sticky pin. The response returns '
-         + 'each updated keyword compactly: serpTop (top 3 ranked results) plus serpResultCount instead of the raw 100-position SERP array.',
+      description: 'Updates tracked keywords by ID: set the target_page that should rank for them, toggle the sticky pin, or both in one call. '
+         + 'The response returns each updated keyword compactly: serpTop (top 3 ranked results) plus serpResultCount instead of the raw '
+         + '100-position SERP array.',
       whenToUse: 'Use to fix a keyword\'s target page so it joins correctly in page_scoreboard. Get IDs from list_keywords first.',
       examplePrompt: 'Set the target page for keyword 42 to /software/mcp.',
    },

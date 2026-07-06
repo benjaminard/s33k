@@ -278,19 +278,24 @@ const updateKeywords = async (req: NextApiRequest, res: NextApiResponse<Keywords
    try {
       const scope = scopeWhere(account);
       const keywords: KeywordType[] = [];
+      // target_page and sticky touch different columns, so both are applied in one call when
+      // both are given, instead of target_page silently winning and sticky getting dropped. Same
+      // work-or-reject contract as the string-type check above: a documented argument must never
+      // be silently ignored.
+      const columnUpdates: Record<string, unknown> = {};
       if (target_page !== undefined) {
-         await Keyword.update({ target_page: target_page.trim() }, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
-         const updatedKeywords:Keyword[] = await Keyword.findAll({ where: { ID: { [Op.in]: keywordIDs }, ...scope } });
-         const formattedKeywords = updatedKeywords.map((el) => el.get({ plain: true }));
-         // The write response is compact: the caller set a target page, they do not need the raw
-         // 100-position SERP echoed back per keyword. serpTop + serpResultCount replace lastResult.
-         return res.status(200).json({ keywords: parseKeywords(formattedKeywords).map(compactKeywordResponse) });
+         columnUpdates.target_page = target_page.trim();
       }
       if (sticky !== undefined) {
-         await Keyword.update({ sticky }, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
-         const updateQuery = { where: { ID: { [Op.in]: keywordIDs }, ...scope } };
-         const updatedKeywords:Keyword[] = await Keyword.findAll(updateQuery);
+         columnUpdates.sticky = sticky;
+      }
+      if (Object.keys(columnUpdates).length > 0) {
+         await Keyword.update(columnUpdates, { where: { ID: { [Op.in]: keywordIDs }, ...scope } });
+         const updatedKeywords:Keyword[] = await Keyword.findAll({ where: { ID: { [Op.in]: keywordIDs }, ...scope } });
          const formattedKeywords = updatedKeywords.map((el) => el.get({ plain: true }));
+         // The write response is compact: the caller set a target page and/or sticky, they do not
+         // need the raw 100-position SERP echoed back per keyword. serpTop + serpResultCount
+         // replace lastResult.
          return res.status(200).json({ keywords: parseKeywords(formattedKeywords).map(compactKeywordResponse) });
       }
       if (tags) {
