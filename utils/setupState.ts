@@ -136,16 +136,19 @@ export const computeSetupCompleted = (stored: Record<string, any>): boolean => {
 
 /**
  * Is first-run setup complete for this instance? Durable flag OR the backfill rule over the
- * stored blob OR an env-configured scraper (an instance whose Serper key/type comes from env,
- * like a docker-compose install, is configured and must never see the setup page).
+ * stored blob OR an env-configured scraper KEY (an instance whose Serper key comes from env, like
+ * a docker-compose install with SERPER_API_KEY set, is configured and must never see the setup
+ * page).
  * @returns {Promise<boolean>} True when /setup and /api/setup must 404.
  */
 export const isSetupCompleted = async (): Promise<boolean> => {
    const stored = await getStoredSettings();
    if (computeSetupCompleted(stored)) { return true; }
-   // Env-configured scraper = an already-provisioned install (the settings row may be empty).
+   // Env-configured scraper = an already-provisioned install (the settings row may be empty). A
+   // key must resolve: SCRAPER_TYPE alone is not enough, since docker-compose.yml and
+   // scripts/setup-env.sh both default SCRAPER_TYPE=serper with no key, so a keyless-type-only
+   // check would mark every fresh install using those defaults as already set up.
    if ((process.env.SERPER_API_KEY || process.env.SCAPING_API || '').trim() !== '') { return true; }
-   if ((process.env.SCRAPER_TYPE || '').trim() !== '' && process.env.SCRAPER_TYPE !== 'none') { return true; }
    // Usage backfill: an install with ANY tracked domain is in use (the analytics-only case has no
    // credential in settings at all), so it must never resurface the installer after an upgrade.
    // Fail toward "not completed" on a read error: the routes are still token-gated and completing
