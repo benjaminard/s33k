@@ -65,6 +65,15 @@ export type KeywordRank = {
     * absent the rank alert simply carries no domainsAbove context.
     */
    serpDomainsAbove?: string[],
+   /**
+    * False ONLY when the route found NO scrape at all for this keyword within this
+    * period's lookback (position is then null too, since no real scrape backs it).
+    * Omitted/true (the default) means `position` is backed by a real scrape, even
+    * when that scrape confirmed the keyword absent (position 0). Distinguishes a
+    * genuine sparse-history data gap from a confirmed rank/absence, so the engine
+    * never claims novelty, or a drop, off a comparison window that has no data.
+    */
+   measured?: boolean,
 };
 
 /** One referring AI engine in a single period (e.g. "ChatGPT", visitors). */
@@ -281,6 +290,13 @@ const domainsAboveSentence = (now: KeywordRank): string => (
  * A keyword with no prior entry to compare against produces NO alert: a first
  * sighting is not a change. Magnitude is encoded so the final sort can rank the
  * biggest movers first within a severity tier.
+ *
+ * HONEST ON SPARSE SCRAPE HISTORY. `measured: false` on either side marks a period
+ * with NO real scrape backing its position (a sparse, e.g. weekly, cadence can leave
+ * a comparison window without a scrape at all). A newly-ranked claim off an unmeasured
+ * prior is softened to "first scrape data" instead of an exciting, possibly-false
+ * novelty claim; a newly-dropped-off claim off an unmeasured current period is
+ * suppressed entirely rather than inventing a drop from a data gap.
  * @param {KeywordRank[]} current - This period's keyword ranks.
  * @param {KeywordRank[]} prior - The prior period's keyword ranks.
  * @returns {Alert[]}
@@ -301,8 +317,22 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
       const beforePos = isRanked(before.position) ? before.position : null;
       const pageRef = now.targetPage ? ` (${now.targetPage})` : '';
 
-      // Newly ranked: was outside the tracked top-N, now appears. A real win.
+      // Newly ranked: was outside the tracked top-N, now appears. A real win, UNLESS
+      // the prior period was never actually measured (sparse scrape history), in which
+      // case this is just the first scrape data on record, not a confirmed new ranking.
       if (nowPos !== null && beforePos === null) {
+         if (before.measured === false) {
+            alerts.push({
+               severity: 'low',
+               pillar: 'rank',
+               headline: `"${now.keyword}"${pageRef} shows its first scrape data in this window: #${nowPos}.`,
+               detail: 'There is no earlier scrape to compare against yet, so this is not necessarily a new '
+                  + 'ranking, just the first data point on record.',
+               recommendation: 'Keep tracking: a real rank trend will emerge once more scrape history accumulates.',
+               context: rankContext(now, nowPos, beforePos),
+            });
+            return;
+         }
          alerts.push({
             severity: nowPos <= PAGE_ONE_MAX ? 'high' : 'medium',
             pillar: 'rank',
@@ -314,8 +344,11 @@ const detectRankChanges = (current: KeywordRank[], prior: KeywordRank[]): Alert[
          });
          return;
       }
-      // Newly dropped off: had a rank, now gone. A real loss.
+      // Newly dropped off: had a rank, now gone. Only a REAL scrape this period (not a
+      // data gap) confirms the absence; with no scrape yet this window there is nothing
+      // to compare, so the engine stays silent rather than inventing a drop.
       if (nowPos === null && beforePos !== null) {
+         if (now.measured === false) { return; }
          alerts.push({
             severity: beforePos <= PAGE_ONE_MAX ? 'high' : 'medium',
             pillar: 'rank',

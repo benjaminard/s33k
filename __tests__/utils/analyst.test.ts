@@ -156,6 +156,62 @@ describe('detectChanges: RANK pillar', () => {
       const out = detectChanges(current, prior);
       expect(out.alerts.filter((a) => a.pillar === 'rank')).toHaveLength(0);
    });
+
+   it('does NOT claim "started ranking" when the prior period was never measured (honest first-scrape wording)', () => {
+      // Sparse (e.g. weekly) scrape history left no scrape at all in the prior window,
+      // so `measured: false` marks it unmeasured rather than confirmed-absent. Claiming
+      // novelty here would overstate a keyword that may have ranked for months.
+      const { current, prior } = pair(
+         { keywords: [kw('masset', 1)] },
+         { keywords: [{ ...kw('masset', null), measured: false }] },
+      );
+      const out = detectChanges(current, prior);
+      const rank = out.alerts.filter((a) => a.pillar === 'rank');
+      expect(rank).toHaveLength(1);
+      expect(rank[0].severity).toBe('low');
+      expect(rank[0].headline).toMatch(/first scrape data/i);
+      expect(rank[0].headline).not.toMatch(/started ranking/i);
+   });
+
+   it('still claims "started ranking" when a real prior scrape confirmed the keyword was absent', () => {
+      // measured is omitted (defaults true): the prior position of 0 is a REAL scrape
+      // result, not a data gap, so the novelty claim is honest.
+      const { current, prior } = pair(
+         { keywords: [kw('new term', 7)] },
+         { keywords: [kw('new term', 0)] },
+      );
+      const out = detectChanges(current, prior);
+      const rank = out.alerts.filter((a) => a.pillar === 'rank');
+      expect(rank).toHaveLength(1);
+      expect(rank[0].severity).toBe('high');
+      expect(rank[0].headline).toMatch(/started ranking at #7/);
+   });
+
+   it('stays SILENT rather than inventing a drop when the CURRENT period has no scrape yet', () => {
+      // No scrape has landed in the current window (measured: false), so we cannot
+      // confirm the keyword actually fell off; fabricating a drop from a data gap
+      // would be exactly the dishonesty this engine is built to avoid.
+      const { current, prior } = pair(
+         { keywords: [{ ...kw('senior-living', null), measured: false }] },
+         { keywords: [kw('senior-living', 9)] },
+      );
+      const out = detectChanges(current, prior);
+      expect(out.alerts.filter((a) => a.pillar === 'rank')).toHaveLength(0);
+   });
+
+   it('flags a HIGH drop-off when a real current scrape confirms the keyword fell off page one', () => {
+      // A real scrape this period found the keyword absent (position 0, measured
+      // defaults true), so the drop is confirmed, not inferred from missing data.
+      const { current, prior } = pair(
+         { keywords: [kw('senior-living', 0)] },
+         { keywords: [kw('senior-living', 9)] },
+      );
+      const out = detectChanges(current, prior);
+      const rank = out.alerts.filter((a) => a.pillar === 'rank');
+      expect(rank).toHaveLength(1);
+      expect(rank[0].severity).toBe('high');
+      expect(rank[0].headline).toMatch(/dropped off/i);
+   });
 });
 
 describe('detectChanges: TRAFFIC pillar', () => {
