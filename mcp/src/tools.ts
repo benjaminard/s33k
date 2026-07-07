@@ -43,6 +43,57 @@ export function errorResult(err: unknown) {
    return { isError: true, content: [{ type: 'text' as const, text: message }] };
 }
 
+/** Levenshtein distance between two short strings, used only for the "did you mean" hint below. */
+function editDistance(a: string, b: string): number {
+   const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+   for (let i = 0; i <= a.length; i += 1) { dp[i][0] = i; }
+   for (let j = 0; j <= b.length; j += 1) { dp[0][j] = j; }
+   for (let i = 1; i <= a.length; i += 1) {
+      for (let j = 1; j <= b.length; j += 1) {
+         dp[i][j] = a[i - 1] === b[j - 1]
+            ? dp[i - 1][j - 1]
+            : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+      }
+   }
+   return dp[a.length][b.length];
+}
+
+/** The closest known argument name to an unrecognized one, if close enough to plausibly be a typo. */
+function nearestKey(unknownKey: string, knownKeys: string[]): string | null {
+   let best: string | null = null;
+   let bestDistance = Infinity;
+   for (const key of knownKeys) {
+      const distance = editDistance(unknownKey, key);
+      if (distance < bestDistance) {
+         bestDistance = distance;
+         best = key;
+      }
+   }
+   return best !== null && bestDistance <= Math.max(2, Math.floor(unknownKey.length / 2)) ? best : null;
+}
+
+/**
+ * Wrap a tool's input shape in a strict zod object. A caller who misnames an argument (e.g.
+ * targetPage instead of target_page) gets a validation error naming the unknown key, with a "did
+ * you mean" hint, instead of the SDK silently stripping it and the call "succeeding" without doing
+ * what the caller intended (see issue #22: this cost a real debugging detour).
+ */
+function strictShape<T extends z.ZodRawShape>(shape: T) {
+   const knownKeys = Object.keys(shape);
+   return z.object(shape, {
+      errorMap: (issue, ctx) => {
+         if (issue.code === z.ZodIssueCode.unrecognized_keys) {
+            const named = issue.keys.map((key) => {
+               const suggestion = nearestKey(key, knownKeys);
+               return suggestion ? `'${key}' (did you mean '${suggestion}'?)` : `'${key}'`;
+            });
+            return { message: `Unrecognized argument(s): ${named.join(', ')}` };
+         }
+         return { message: ctx.defaultError };
+      },
+   }).strict();
+}
+
 /**
  * The knowledge resources exposed alongside the tools. Defined here (rather than inside the
  * registration function) so a transport can read the count for a startup banner without
@@ -121,9 +172,9 @@ server.registerTool(
          + 'resolves, otherwise "not_connected" with its own mint_key_drop path for a service-account JSON). A keyless instance '
          + 'with flowing analytics is HEALTHY with the SEO module off, not incomplete. Composes existing data (dashboard + setup '
          + '+ reports); never queries an LLM; never fails, every mode is a usable next move.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().optional().describe('The domain to start on, e.g. "example.com". Omit to pick from your tracked domains.'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -143,7 +194,7 @@ server.registerTool(
       title: 'List domains',
       description:
          'List every domain tracked in s33k, each with its name and settings. Use this first to discover which domains exist before calling any domain-scoped tool.',
-      inputSchema: {},
+      inputSchema: strictShape({}),
    },
    async () => {
       try {
@@ -164,9 +215,9 @@ server.registerTool(
       title: 'List keywords',
       description:
          'List a domain\'s tracked keywords with each keyword\'s current Google rank, ranking URL, target page, and last-7-days rank history. Use this to read SEO standings, get keyword IDs for update_keyword or delete_keyword, or check whether a keyword has scraped yet.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to list keywords for, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -197,7 +248,7 @@ server.registerTool(
       title: 'Add keyword',
       description:
          'Add one keyword to track for a domain and queue a background Google SERP scrape, so its rank appears shortly after. Use this to start tracking a search term, ideally passing target_page so the keyword joins to a page in page_scoreboard. To add many keywords at once, call this tool once per keyword. The response returns the created keyword (including its stored target_page) in compact form: serpTop (top 3 ranked results) plus serpResultCount instead of a raw SERP array.',
-      inputSchema: {
+      inputSchema: strictShape({
          keyword: z.string().describe('The search keyword/phrase to track.'),
          domain: z.string().describe('The domain to track this keyword for, e.g. "example.com".'),
          country: z
@@ -212,7 +263,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('Optional target page path/URL this keyword should rank for, e.g. "/software/mcp".'),
-      },
+      }),
    },
    async ({ keyword, domain, country, device, target_page }) => {
       try {
@@ -244,7 +295,7 @@ server.registerTool(
       title: 'Refresh keywords',
       description:
          'Re-scrape live Google rankings for keywords that may be stale. Pass either a list of keyword IDs or a single domain to refresh all of its keywords, but not both. A small batch scrapes synchronously and returns updated ranks; a larger batch runs in the background, so re-read with list_keywords shortly after.',
-      inputSchema: {
+      inputSchema: strictShape({
          ids: z
             .array(z.number().int())
             .optional()
@@ -253,7 +304,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('Refresh every keyword for this domain. Use this OR "ids", not both.'),
-      },
+      }),
    },
    async ({ ids, domain }) => {
       try {
@@ -283,7 +334,7 @@ server.registerTool(
       title: 'Get Search Console insight',
       description:
          'Read Google Search Console insight for a domain, summary-first and bounded by default so the response fits an LLM context window: aggregate stats (clicks, impressions, ctr, position, window), the top 25 keywords by clicks, 15 untapped keywords (low-click rows ranked by impressions, the demand a marketer mines), the top 15 pages by clicks, the top 10 countries, and a compact daily series (date, clicks, impressions, position). A meta block carries the full totals, a truncated flag, and a hint. Pass limit (clamped 1..200) to widen or narrow the keyword and page lists, or detail=true for the full unbounded arrays (every keyword, page, country, and day; can be very large). Use this for real impression and click data straight from Google, beyond the keywords you explicitly track. Requires Search Console to be connected, otherwise it returns an error. The easiest connect path is mint_key_drop with secret "gsc_service_account" (one curl line sends the service-account JSON from the user\'s own terminal); the OAuth consent link (connect_search_console) also works when the instance has a GSC OAuth app configured.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to get insight for, e.g. "example.com".'),
          limit: z
             .number()
@@ -294,7 +345,7 @@ server.registerTool(
             .boolean()
             .optional()
             .describe('Pass true for the full unbounded arrays (every keyword, page, country, and day). Default is the bounded summary.'),
-      },
+      }),
    },
    async ({ domain, limit, detail }) => {
       try {
@@ -323,9 +374,9 @@ server.registerTool(
          + 'OAuth app configured (the response says so when it does not). When no OAuth app is configured, the easiest path is mint_key_drop '
          + 'with secret "gsc_service_account": it mints a one-curl-line drop for a Google service-account JSON and carries the full '
          + 'Google-side walkthrough, and the credential never passes through this chat.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to connect Google Search Console for, e.g. "example.com". You must own it.'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -354,7 +405,7 @@ server.registerTool(
       title: 'Page scoreboard',
       description:
          'Join per-page traffic with tracked keywords for a domain, the core SEO-plus-analytics view. Use this to see which pages earn traffic, what each ranks for, and where the gaps are. Returns a per-page scoreboard (traffic plus the keywords targeting each page, sorted by page views), pages that have traffic but no tracked keyword (a content-gap signal), and keywords whose target page matched no analytics page. Each page row also carries aiReferralVisitors (AI-engine-referred visitors that landed on that page); this is EXACT from first-party sessions when the s33k.js tracking script is installed, and falls back to a provider landing_path or 0 (aiReferralNote explains) otherwise. OPTIONAL goal parameter: pass a goal name or goalId to add per-page conversions (goal conversions whose first-party session LANDED on that page) and conversionRate (over first-party sessions that landed there, percent) to every page row; conversionsNote explains the denominators and conversionRate is null on a page with no first-party landing sessions. Omit goal and the scoreboard is unchanged (no conversion fields). Per-page bounce_rate and avg_duration may be null when s33k\'s analytics engine cannot report them at page grain; metricsNote explains the null.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to build the scoreboard for, e.g. "example.com".'),
          period: z
             .string()
@@ -368,7 +419,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('OPTIONAL goal id (numeric) to add per-page conversions + conversionRate, instead of goal name. Get ids from list_goals.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId }) => {
       try {
@@ -410,7 +461,7 @@ server.registerTool(
          + 'top 20 by entries (see meta.truncated / meta.totalEntryPages). Pass detail=true for every row, or limit=N (1..200) to change the cap. '
          + 'Complements page_scoreboard (all pages) by focusing only on entry pages. Never queries an LLM; degrades gracefully and never fails on a '
          + 'missing sub-signal.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to analyze entry pages for, e.g. "example.com".'),
          period: z
             .string()
@@ -424,7 +475,7 @@ server.registerTool(
             .boolean()
             .optional()
             .describe('Set true to return the FULL per-page entryPages array (can be thousands of rows on a real site). Default false returns the bounded top-N.'),
-      },
+      }),
    },
    async ({ domain, period, limit, detail }) => {
       try {
@@ -449,13 +500,13 @@ server.registerTool(
       title: 'AI referrals',
       description:
          'Report which AI engines (ChatGPT, Perplexity, Gemini, Claude, Copilot, and more) are sending real visitors to a domain. Use this to measure AEO outcomes: actual traffic that AI answer engines drove. It reads analytics REFERRAL data and never queries an LLM. Returns a per-engine breakdown (visitors, sorted by visitors) plus totals: AI visitors, all referred visitors, and the AI share of referred traffic.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report AI referrals for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window for analytics, e.g. "90d", "30d". Defaults to "90d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -490,13 +541,13 @@ server.registerTool(
          + 'the top pages and scores their AI-readiness (llms.txt, Markdown twins, JSON-LD, answer-shaped content) as a '
          + 'leading indicator. This complements ai_referrals (raw referral detail) by adding the per-page view and the '
          + 'citability audit.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to measure AI-search visibility for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -519,13 +570,13 @@ server.registerTool(
       title: 'Traffic summary',
       description:
          'Get site-wide traffic totals for a domain over a window: pageviews, unique visitors, visits, bounce rate (percent), average visit duration (seconds), and pages per visit. The visitors total here is the RAW provider total and INCLUDES bots; for the real human number use start_here / dashboard / human_traffic (datacenter-filtered). This tool also returns visitorsRaw and humanVisitors side by side, plus a note when they diverge by more than 25 percent. Use this for the one-line health check of a site before drilling into traffic_breakdown, traffic_timeseries, or page_scoreboard. For a guided overview call start_here first.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to summarize, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -554,13 +605,13 @@ server.registerTool(
       title: 'Human vs bot traffic estimate',
       description:
          'Report how much of a domain\'s traffic is humans versus bots. Use this to sanity-check the other traffic numbers, because JavaScript pageview trackers count JavaScript-executing cloud scrapers as real visitors (for example heavy Hong Kong, Singapore, and China datacenter traffic at near-100 percent bounce). The split comes from FIRST-PARTY tracking: each session\'s source IP is classified as datacenter-or-not at ingest (the is_bot signal a JS pageview tracker cannot see), so cloud scrapers are filtered instead of counted. This makes the number EXACT for the first-party sessions it has, and identical to human_analytics, start_here, and the dashboard headline (one source of truth). Returns estVisitors, estHumanVisitors, estBotVisitors, botSharePct, botEstimationAvailable, and method. If no first-party sessions have arrived yet (the s33k.js script is not installed), botEstimationAvailable is false and the bot split is omitted rather than guessed: install s33k.js to populate it.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to estimate human vs bot traffic for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -592,7 +643,7 @@ server.registerTool(
          + 'standard analytics summary cannot produce), plus botVisitorsFiltered and botSharePct for '
          + 'transparency. Requires the s33k.js tracking script to be installed on the site (pageviews '
          + 'flow into /api/collect). Pass includeBots=true to see the raw with-bots numbers for comparison.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report human-only analytics for, e.g. "example.com".'),
          period: z
             .string()
@@ -602,7 +653,7 @@ server.registerTool(
             .boolean()
             .optional()
             .describe('When true, include datacenter/bot pageviews in the numbers (raw view). Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, includeBots }) => {
       try {
@@ -638,14 +689,14 @@ server.registerTool(
          + 'autocaptured event of type matchValue (e.g. "form_submit"), optionally constrained to a '
          + 'page via matchPage. Once a goal exists, goal_analytics reports its conversion rate, filtered '
          + 'and grouped any way.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain the goal belongs to, e.g. "example.com".'),
          name: z.string().describe('The goal name used in questions, e.g. "Demo Booked".'),
          kind: z.enum(['page_reached', 'event']).describe('"page_reached" (a path was viewed) or "event" (an event fired).'),
          matchValue: z.string().describe('page_reached: the path/prefix (e.g. "/demo/thanks"). event: the event type (e.g. "form_submit").'),
          matchPage: z.string().optional().describe('event kind only: restrict the event to a page path (prefix).'),
          matchMode: z.enum(['prefix', 'exact']).optional().describe('page_reached only: path match mode. Defaults to "prefix".'),
-      },
+      }),
    },
    async ({ domain, name, kind, matchValue, matchPage, matchMode }) => {
       try {
@@ -668,9 +719,9 @@ server.registerTool(
    {
       title: 'List conversion goals',
       description: 'List the named conversion goals defined for a domain, with their match rules.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain whose goals to list, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -690,9 +741,9 @@ server.registerTool(
    {
       title: 'Delete a conversion goal',
       description: 'Delete a named conversion goal by its id (get ids from list_goals).',
-      inputSchema: {
+      inputSchema: strictShape({
          id: z.number().describe('The goal id to delete.'),
-      },
+      }),
    },
    async ({ id }) => {
       try {
@@ -721,7 +772,7 @@ server.registerTool(
          + 'landingPage, page, device (mobile|tablet|desktop), country (ISO), engagement '
          + '(engaged|bounced). Human-only by default; includeBots=true to fold bots in. Returns '
          + 'totalSessions, conversions, conversionRatePct, and (with groupBy) per-group rates.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          goal: z.string().optional().describe('The goal NAME (or pass goalId). e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('The goal id (alternative to goal name).'),
@@ -735,7 +786,7 @@ server.registerTool(
          country: z.string().optional().describe('Filter by ISO country code (where geo data is available).'),
          engagement: z.enum(['engaged', 'bounced']).optional().describe('Filter by engagement quality.'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, goal, goalId, period, groupBy, channel, landingPage, page, device, country, engagement, includeBots }) => {
       try {
@@ -785,7 +836,7 @@ server.registerTool(
          + 'convert, pages that convert but do not rank, and where AI out-converts search). Human-only '
          + 'by default; the same composable filters apply. Requires the tracking script installed and '
          + 'at least one goal.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          goal: z.string().optional().describe('The goal NAME (or pass goalId), e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('The goal id (alternative to goal name).'),
@@ -795,7 +846,7 @@ server.registerTool(
          device: z.string().optional().describe('Optional device filter: mobile, tablet, desktop.'),
          country: z.string().optional().describe('Optional ISO country filter.'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, goal, goalId, period, channel, landingPage, device, country, includeBots }) => {
       try {
@@ -829,10 +880,10 @@ server.registerTool(
          + 'queries an AI engine itself. After tracking, YOU (the assistant) run the prompt against the '
          + 'engines (ChatGPT, Claude, Perplexity, Gemini) and record what you find with prompt_record. '
          + 'Track the prompts your buyers actually ask.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain the prompt is tracked for, e.g. "example.com".'),
          prompt: z.string().describe('The buyer prompt to watch, e.g. "best project management software for remote teams".'),
-      },
+      }),
    },
    async ({ domain, prompt }) => {
       try {
@@ -857,7 +908,7 @@ server.registerTool(
          + 'engines itself: it has no server-side LLM, so this is the ONLY way a citation result enters '
          + 's33k. You supply the result; s33k stores it. Target the prompt by id (from prompt_list) or by '
          + 'domain+prompt. When cited is false, position and cited_url are ignored.',
-      inputSchema: {
+      inputSchema: strictShape({
          id: z.number().optional().describe('The tracked prompt id (from prompt_list). Alternative to domain+prompt.'),
          domain: z.string().optional().describe('The domain (with prompt) to identify the tracked prompt, if no id.'),
          prompt: z.string().optional().describe('The tracked prompt text (with domain) to identify it, if no id.'),
@@ -865,7 +916,7 @@ server.registerTool(
          cited: z.boolean().describe('Was this domain cited in the engine\'s answer?'),
          position: z.number().optional().describe('Citation position (1 = first cited source), when cited and known.'),
          cited_url: z.string().optional().describe('The exact URL the engine cited for this domain, when given.'),
-      },
+      }),
    },
    async ({ id, domain, prompt, engine, cited, position, cited_url: citedUrl }) => {
       try {
@@ -894,9 +945,9 @@ server.registerTool(
          'List a domain\'s tracked buyer prompts and the latest recorded citation result for each '
          + '(engine, cited or not, position, cited URL, when checked). Prompts with no result yet show as '
          + 'not-yet-recorded, the ones still needing you to run and record them with prompt_record.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain whose tracked prompts to list, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -923,12 +974,12 @@ server.registerTool(
          + 'is X", or "none of the cited pages converted"). Honest when nothing is recorded yet. s33k NEVER '
          + 'queries an engine: it narrates the results YOU recorded with prompt_record. Track and record '
          + 'prompts first so there is data to join.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window for the conversion/referral join, e.g. "30d". Defaults to "30d".'),
          goal: z.string().optional().describe('A goal NAME (or pass goalId) to join conversion rate per cited page, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('The goal id (alternative to goal name).'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId }) => {
       try {
@@ -977,10 +1028,10 @@ server.registerTool(
          + 'causation. When a page lacks enough history it says "not enough history yet" rather than guess. '
          + 'Human-only by default. RULES-BASED: the s33k server does NOT call any LLM; it does the join with '
          + 'transparent thresholds and YOU narrate the links, always framing them as correlation, never cause.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window for the traffic side, e.g. "30d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1013,9 +1064,9 @@ server.registerTool(
          + 'like demo, contact, or signup (a form_submit goal). It only SUGGESTS; review the list and '
          + 'create the ones you want with create_goal. Use this right after onboarding so a user gets '
          + 'conversion tracking without having to think up their own goals.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to suggest goals for, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -1046,9 +1097,9 @@ server.registerTool(
          + 'and complete, with SEO simply an optional module that is off. Use this to walk a new user from '
          + 'zero to value step by step, and any time someone asks "what should I set up next?", "is my '
          + 's33k configured?", or "which modules are on?".',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to check setup for, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -1089,13 +1140,13 @@ server.registerTool(
          + 'server. NEVER ask the user to paste a key or JSON into the conversation; mint this command instead. '
          + 'After the user confirms they ran it, verify: setup_status for the SEO module, get_insight for Search '
          + 'Console (after they grant the service-account email access on the property).',
-      inputSchema: {
+      inputSchema: strictShape({
          secret: z
             .enum(['serper', 'gsc_service_account'])
             .default('serper')
             .describe('Which secret the drop sets. "serper" (the default) enables the SEO module; '
                + '"gsc_service_account" connects Google Search Console from a service-account JSON file.'),
-      },
+      }),
    },
    async ({ secret }) => {
       try {
@@ -1129,7 +1180,7 @@ server.registerTool(
          + 'delta over the tracked history (negative means it is IMPROVING, climbing toward page one; positive means it is slipping), plus the start '
          + 'and recent positions and how many history points backed the delta. Sorted by closeness to page one then by recent improvement, so the '
          + 'easiest, most upward-moving wins are on top. Pure query over tracked keywords. Never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to scan for striking distance keywords, e.g. "example.com".'),
          min: z
             .number()
@@ -1139,7 +1190,7 @@ server.registerTool(
             .number()
             .optional()
             .describe('Inclusive upper bound of the striking window (Google rank position). Defaults to 30.'),
-      },
+      }),
    },
    async ({ domain, min, max }) => {
       try {
@@ -1177,13 +1228,13 @@ server.registerTool(
          + 'converts. It also surfaces the top referring sources WITHIN the Referral channel (which '
          + 'sites send you referral traffic). Human-only by default; set includeBots=true to fold '
          + 'datacenter/bot sessions back in. Requires the s33k.js tracking script installed.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add per-channel conversions, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -1224,10 +1275,10 @@ server.registerTool(
          + '(the most recent events, newest first) so you can narrate what just happened. Human-only by '
          + 'default; datacenter/bot events are excluded and reported as botEventsExcluded. Requires the '
          + 's33k.js tracking script installed so events flow in.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          windowMinutes: z.number().optional().describe('How many minutes back to look. Defaults to 5, clamped to 1..60.'),
-      },
+      }),
    },
    async ({ domain, windowMinutes }) => {
       try {
@@ -1271,7 +1322,7 @@ server.registerTool(
          + 'optionally constrained to a page. Answers "of visitors who hit /pricing, how many reached '
          + 'checkout, and where do they drop?". Human-only by default; includeBots=true folds bots in. '
          + 'The same composable segment filters apply. Deterministic, no LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          steps: z.array(z.object({
             type: z.enum(['page', 'event']).describe('"page" matches a viewed path prefix; "event" matches a fired event type.'),
@@ -1286,7 +1337,7 @@ server.registerTool(
          country: z.string().optional().describe('Filter by ISO country code (where geo data is available).'),
          engagement: z.enum(['engaged', 'bounced']).optional().describe('Filter by engagement quality.'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, steps, period, channel, landingPage, page, device, country, engagement, includeBots }) => {
       try {
@@ -1331,13 +1382,13 @@ server.registerTool(
          + 'link most analytics tools never make. Two gaps fall out of the data: a ranking page with zero entries '
          + '(ranking-without-landing, fix the funnel) and an entry page that pulls sessions but holds no tracked '
          + 'keywords (landing-without-ranking, brand/direct driven). Human-only by default; the goal is optional.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d". Defaults to "30d".'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add per-page conversions+rate, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -1371,13 +1422,13 @@ server.registerTool(
          + 'pctChange is null when the prior window had zero (growth from zero is undefined; render it '
          + 'as "new"). Human-only by default; set includeBots=true to fold datacenter/bot sessions '
          + 'back in. Requires the s33k.js tracking script installed.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d". Defaults to "30d". The prior equal-length window is derived from it.'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add conversions and conversion rate to the comparison.'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -1416,9 +1467,9 @@ server.registerTool(
          + 'titles shared across pages, and thin content. Each issue returns the page, the issue, a severity '
          + '(high / medium / low), and a detail line with the fix. Sorted by severity so the most damaging '
          + 'items (missing titles and H1s) surface first. Pure rules over the crawl. Never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to audit, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -1443,9 +1494,9 @@ server.registerTool(
          + 'Flags three signals: (a) intent split, a keyword ranks on a url that is not its target page; (b) shared ranking url, distinct keywords '
          + 'ranking on the SAME url while targeting different pages; (c) near-duplicate terms ranking on DIFFERENT urls. Returns flagged groups, each '
          + 'with the conflict type, the competing keywords/urls, and a one-line why. Never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to scan for keyword cannibalization, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -1476,10 +1527,10 @@ server.registerTool(
          + 'target pages as extra covered topics) to derive what you already cover, and returns the competitor topics with NO close match in yours: '
          + 'the gaps. Each gap carries the competitor url, the derived topic phrase, and the page path/title, sorted by how content-rich the '
          + 'competitor page looks (excerpt length), richest first. Pure crawl-based string comparison. Never queries an LLM and uses no external API.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('Your domain, the one you want gaps found FOR, e.g. "example.com". Must be tracked in s33k.'),
          competitor: z.string().describe('The competitor domain to compare against, e.g. "highspot.com". Only crawled, does not need to be tracked.'),
-      },
+      }),
    },
    async ({ domain, competitor }) => {
       try {
@@ -1513,14 +1564,14 @@ server.registerTool(
          + 'view. A tracked page that gets zero traffic still appears (ranking-without-traffic) with empty entries. Human-only by default; set '
          + 'includeBots=true to fold datacenter/bot sessions back in. Sorted by pageviews, capped by limit. Never queries an LLM; returns structured '
          + 'data for your own LLM to narrate. Requires the s33k.js tracking script installed.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add view-attributed conversions per page, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
          limit: z.number().optional().describe('Max pages to return (top N by pageviews). Defaults to 25, clamped to 1..200.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots, limit }) => {
       try {
@@ -1566,13 +1617,13 @@ server.registerTool(
          + 'call any LLM: it does the joins with transparent rules and hands YOU (the connected LLM) the '
          + 'structured digest to narrate as a weekly standup. Use it for a fast "how did the site do this '
          + 'week?" read, or as a Monday recap.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "7d". Defaults to "7d" (a week in review).'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add conversions + the top opportunity, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -1612,13 +1663,13 @@ server.registerTool(
          + 'channel, an SEO snapshot (keywords on page one plus the biggest rank gain and loss over the period), '
          + 'AI visibility (whether AI engines send visitors), a plain-English healthLine, and the single nextAction. '
          + 'Human-only by default. Rules-based, no server-side LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d". Defaults to "30d".'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add conversions and the top converting channel.'),
          goalId: z.number().optional().describe('Optional goal id.'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -1656,7 +1707,7 @@ server.registerTool(
          + 'and rankingPages (tracked keywords grouped by their target_page, busiest page first, each page listing the terms it holds and their '
          + 'positions, best rank first). Use this for the "how is my SEO doing overall and what should I work" question, then drill into '
          + 'striking_distance, page_scoreboard, or keyword detail from there.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to build the SEO report for, e.g. "example.com".'),
          min: z
             .number()
@@ -1670,7 +1721,7 @@ server.registerTool(
             .number()
             .optional()
             .describe('How many movers to return per side (improvements and drops). Defaults to 5, max 50.'),
-      },
+      }),
    },
    async ({ domain, min, max, moversLimit }) => {
       try {
@@ -1695,13 +1746,13 @@ server.registerTool(
       title: 'AEO report',
       description:
          'One-call AI-search (AEO) snapshot for a domain. Bundles the first-party AI-referral signal so a marketer gets the whole AI-search picture at once, never querying an LLM: aiReferrals (which AI engines actually SENT visitors, per engine, with counts and AI share of referred traffic), and an engineSummary (per engine: referral visitors, plus the topAdvocate). When first-party data is thin the note says so honestly. Use this instead of stitching ai_referrals + ai_visibility by hand. Defaults to a 30-day window.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to build the AEO report for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1732,7 +1783,7 @@ server.registerTool(
       title: 'Traffic breakdown',
       description:
          'Break a domain\'s traffic down by a single dimension. Use this to answer where visitors come from or what they use. Analytics is first-party from the beacon, which collects the country and device dimensions only; those two return real rows. The other dimensions (region, city, browser, os, language, screen) are accepted but have no beacon column in single-beacon mode and return empty rows. Each row has a name, page views, and unique visitors. These per-row visitor counts are the RAW provider total and INCLUDE bots; for the real human number use start_here / dashboard / human_traffic (datacenter-filtered).',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to break down, e.g. "example.com".'),
          dimension: z
             .enum(['country', 'region', 'city', 'device', 'browser', 'os', 'language', 'screen'])
@@ -1741,7 +1792,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, dimension, period }) => {
       try {
@@ -1764,7 +1815,7 @@ server.registerTool(
       title: 'Traffic time series',
       description:
          'Get a daily (or unit-grouped) time series of pageviews and visitors for a domain over a window. Use this to spot trends, spikes, and drops over time, or to compare two periods. Each point has a date label, pageviews, and visitors. These visitor counts are the RAW provider total and INCLUDE bots; for the real human number use start_here / dashboard / human_traffic (datacenter-filtered).',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to chart, e.g. "example.com".'),
          period: z
             .string()
@@ -1774,7 +1825,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('Bucket unit, e.g. "day". Defaults to "day".'),
-      },
+      }),
    },
    async ({ domain, period, unit }) => {
       try {
@@ -1798,13 +1849,13 @@ server.registerTool(
       title: 'Top events',
       description:
          'List a domain\'s custom or tracked events over a window with their fire counts. Use this to see which tracked actions (signups, clicks, downloads, and the like) fired most. Each row has an event name and a count; the list is empty when the site records no custom events.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to list events for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1827,13 +1878,13 @@ server.registerTool(
       title: 'Engagement tiers',
       description:
          'Break a domain\'s sessions into engagement tiers (such as bounced, browsed, and engaged) over a window. Use this to judge traffic quality, not just volume: a high bounced share signals low-quality or bot traffic. Each tier has a label, session count, percentage of all sessions, and (where available) average duration and average pages per session.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to measure engagement for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1861,13 +1912,13 @@ server.registerTool(
          + '(label), a stable CSS selector, the total clickCount, and a per-page breakdown (byPage) of where it was clicked, '
          + 'sorted by clickCount. Privacy: this reports THAT an element was clicked and its visible text/selector, NEVER any '
          + 'value typed into an input. Cookieless, no PII. Reads the first-party event store; never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report top clicks for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1895,13 +1946,13 @@ server.registerTool(
          + 'id/name as label, submissionCount, and a per-page byPage breakdown, sorted by count) plus totalSubmissions. '
          + 'Privacy: this records THAT a form was submitted and its id/name, NEVER any field value or anything typed. '
          + 'Cookieless, no PII. Reads the first-party event store; never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report form submissions for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1935,13 +1986,13 @@ server.registerTool(
          + 'by avgScrollDepth) plus a site-wide distribution histogram bucketed 0-25 / 25-50 / 50-75 / 75-100 percent. '
          + 'Scroll depth is the max percent reached per session/page. Cookieless, no PII. Reads the first-party event store; '
          + 'never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report scroll depth for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -1975,13 +2026,13 @@ server.registerTool(
          + 'site-wide siteAvgEngagementSeconds. Engagement is ACTIVE time only: the client pauses the timer when the tab is '
          + 'hidden, the window loses focus, or the visitor goes idle, so this is real attention, not a tab left open. '
          + 'Cookieless, no PII. Reads the first-party event store; never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report page engagement for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2016,13 +2067,13 @@ server.registerTool(
          + 'metric, its p75, rating, sampleCount, and unit (ms, or score for CLS). This is FIELD data from real visitors, not a lab '
          + 'test, and flows from the same s33k.js tag as the other analytics, so no extra setup is needed. When no samples exist '
          + 'yet, the response includes an explanatory note. Cookieless, no PII. Reads the first-party event store; never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report Core Web Vitals for, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2065,7 +2116,7 @@ server.registerTool(
          + 'divided by the distinct sessions that fired any autocaptured event under that source in the window, so sessions '
          + 'with no event at all are not in the base and the true rate is no higher than reported (read conversionRateNote). '
          + 'Cookieless, no PII. Reads the first-party event store; never queries an LLM, and never errors on a thin sub-signal.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to report conversions for, e.g. "example.com".'),
          period: z
             .string()
@@ -2075,7 +2126,7 @@ server.registerTool(
             .string()
             .optional()
             .describe('The conversion event type to attribute. Defaults to "form_submit" (autocaptured form submissions).'),
-      },
+      }),
    },
    async ({ domain, period, event }) => {
       try {
@@ -2108,13 +2159,13 @@ server.registerTool(
       title: 'Cross-pillar insights',
       description:
          'Get a ready-made cross-pillar analysis for a domain in one call. Use this when you want the highest-leverage findings without running each tool yourself. It joins all three s33k pillars (SEO rank, analytics traffic, AI referrals, and engagement) and returns RULES-BASED structured findings and recommendations for YOU (the LLM) to interpret and narrate. The s33k server does NOT call any LLM; it does the joins and surfaces signals dashboards bury. Findings include high-traffic pages with poor or no keyword rank (an SEO opportunity), keywords ranking well but on low-traffic pages (a demand or click-through mismatch), pages and engines receiving AI answer-engine referral traffic (AEO proof), traffic concentrated on a single page (a resilience risk), and an estimated-bot-traffic caveat (how much measured traffic is likely automated, so the other numbers can be read correctly). Each finding has a type, severity, message, and evidence; recommendations is a prioritized list of concrete next actions.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to analyze, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "90d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2144,13 +2195,13 @@ server.registerTool(
       title: 'Daily briefing',
       description:
          'A current point-in-time SNAPSHOT of how a domain is doing right now (not a change report). It composes every s33k pillar (traffic, human-vs-bot reality, SEO rank and opportunity pages, AI visibility from referrals, and engagement) into one ready-to-narrate structure: a headline, sections (each a titled list of plain-English points covering traffic/human-vs-bot, search rank and opportunity pages, AI visibility, and engagement), and the top 3 recommended actions in priority order. (For the daily home and "what changed since the prior period", call daily_brief instead; alerts drills into one change signal in full detail.) The s33k server does NOT call any LLM; it does the joins and the prioritization with transparent rules. YOU (the connected LLM) read this and narrate it, leading with the headline and the recommendations. It never fails on a missing signal: a dead provider or empty data degrades one section instead of the whole briefing.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to brief on, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2199,7 +2250,7 @@ server.registerTool(
          + 'call any LLM; it computes the deltas with transparent rules and stays silent on any signal it cannot honestly '
          + 'measure (e.g. no prior traffic baseline) rather than inventing a swing from zero. YOU (the connected LLM) narrate '
          + 'the alerts, leading with topPriority. It never fails on a missing signal: each pillar degrades independently.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to analyze for changes, e.g. "example.com".'),
          period: z
             .string()
@@ -2212,7 +2263,7 @@ server.registerTool(
             .describe('An ISO 8601 timestamp (e.g. "2026-07-01T00:00:00Z"). Scopes the CURRENT window to [since, now) and '
                + 'compares it to the equal-length window before it: the cheap "what changed since yesterday" poll. Must be in '
                + 'the past and within the last 365 days; an invalid value is a clear 400. Takes precedence over period.'),
-      },
+      }),
    },
    async ({ domain, period, since }) => {
       try {
@@ -2255,13 +2306,13 @@ server.registerTool(
          + 'rules and is HONEST on a quiet week ("nothing material changed") rather than inventing movement. YOU (the '
          + 'connected LLM) narrate it, leading with the headline and the top action. It never fails on a missing signal: each '
          + 'upstream surface degrades independently.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to brief on, e.g. "example.com".'),
          period: z
             .string()
             .optional()
             .describe('The window compared against its immediately-prior equivalent, e.g. "7d" (this week vs last week). Defaults to "7d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2295,12 +2346,12 @@ server.registerTool(
       title: 'Create domain',
       description:
          'Add one or more domains to track in s33k. Use this once per site before adding its keywords or reading its analytics. Pass bare domain names (for example "example.com"), not full URLs.',
-      inputSchema: {
+      inputSchema: strictShape({
          domains: z
             .array(z.string())
             .min(1)
             .describe('Domain names to add, e.g. ["example.com"]. Bare hostnames, no protocol.'),
-      },
+      }),
    },
    async ({ domains }) => {
       try {
@@ -2321,7 +2372,7 @@ server.registerTool(
       title: 'Update keyword',
       description:
          'Update one or more tracked keywords by ID. Use this to set a keyword\'s target_page (the page that should rank for it) so it joins correctly in page_scoreboard, or to toggle its sticky pin. Get the IDs from list_keywords first. target_page and sticky touch different columns, so passing both applies both in the same call. The response returns each updated keyword in compact form: serpTop (top 3 ranked results: position, url, title) plus serpResultCount instead of the raw 100-position SERP array.',
-      inputSchema: {
+      inputSchema: strictShape({
          ids: z
             .array(z.number().int())
             .min(1)
@@ -2334,7 +2385,7 @@ server.registerTool(
             .boolean()
             .optional()
             .describe('Whether to pin the keyword as sticky. Applied together with target_page when both are given.'),
-      },
+      }),
    },
    async ({ ids, target_page, sticky }) => {
       try {
@@ -2369,12 +2420,12 @@ server.registerTool(
       title: 'Delete keyword',
       description:
          'Permanently delete one or more tracked keywords by ID. Use this to stop tracking terms you no longer care about. Get the IDs from list_keywords first. This cannot be undone, so confirm the IDs before calling. Returns how many keywords were removed.',
-      inputSchema: {
+      inputSchema: strictShape({
          ids: z
             .array(z.number().int())
             .min(1)
             .describe('Keyword IDs to delete.'),
-      },
+      }),
    },
    async ({ ids }) => {
       try {
@@ -2398,9 +2449,9 @@ server.registerTool(
       title: 'Discover pages',
       description:
          'Crawl a domain and return a compact summary of each important page, the fastest way to onboard a new site. Use this at the start so you can map keywords to real pages instead of guessing. s33k crawls the domain (sitemap.xml first, then homepage links) and returns url, path, title, meta description, h1 and h2 headings, and a short text excerpt per page. No server-side LLM is used and no API key is needed: YOU (the connected LLM) read these summaries, infer what each page is about, propose 1 to 2 target keywords per important page, and call add_keyword for each (passing the page path as target_page). Capped at 25 pages. Never throws; per-page or top-level failures come back as an "error" field.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to read pages from, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -2425,9 +2476,9 @@ server.registerTool(
       title: 'Onboard a domain',
       description:
          'Give me a domain and I set up everything for it in one call, the fastest way to go from nothing to live data. s33k will: create the domain, crawl a few of its pages and heuristically discover candidate target keywords (no LLM needed), add up to 20 of them and immediately queue background Google rank scrapes (rankings appear shortly, so rankingsPending comes back true), provision a dedicated analytics website for the domain, and return the tracking snippet plus copy-paste install guides for common platforms (raw HTML, Google Tag Manager, WordPress, Webflow, Shopify, Squarespace, Wix, Next.js/React). Pass a bare domain like "example.com", not a full URL. Use this as the first thing you do for a brand new site. The first Google rank check runs in the background right after this returns (rankingsPending true only when keywords were added AND a SERP source is configured), so re-check with list_keywords or start_here shortly; rankings then refresh weekly, and a timingNote in the response says the same. Degrades gracefully: if analytics is not set up yet, siteId comes back null, analyticsReady is false, the installSnippet/installGuides are omitted (a blank snippet cannot attribute anything), and a note explains why, while the domain, keywords, and rankings are still set up. Returns { domain, discoveredKeywords, addedKeywords, rankingsPending, siteId, analyticsReady, installSnippet, installGuides, firstRunHint, nextStepMessage, timingNote, note }.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The bare domain to onboard, e.g. "example.com". No protocol, no path.'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -2448,9 +2499,9 @@ server.registerTool(
       title: 'Install instructions',
       description:
          'Show how to add the s33k analytics tracking code to a site, including the exact snippet and step-by-step instructions for the user\'s platform. Use this when someone asks "how do I add the tracking code on <platform>" (WordPress, Webflow, Shopify, Squarespace, Wix, Google Tag Manager, Next.js/React, or raw HTML), or any time after onboarding when they need the snippet again. The domain must already be onboarded. Returns { domain, siteId, installSnippet, installGuides } where installGuides.platforms is a list of { platform, steps }. Read the steps for the platform the user named and walk them through it.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The already-onboarded domain, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -2475,7 +2526,7 @@ server.registerTool(
          + 'verify exactly what s33k stores. Your data is yours: this is the export side of that promise. It NEVER includes '
          + 'any secret: Search Console / Google Ads credentials are reported only as configured-or-not. Returns the full '
          + 'bundle with a counts summary.',
-      inputSchema: {},
+      inputSchema: strictShape({}),
    },
    async () => {
       try {
@@ -2506,7 +2557,7 @@ server.registerTool(
          + 'prove it, so the answer is verifiable, not just asserted. Use this whenever a user asks '
          + 'whether s33k is safe, private, or trustworthy, or whether it trains on or shares their '
          + 'data.',
-      inputSchema: {},
+      inputSchema: strictShape({}),
    },
    async () => {
       try {
@@ -2535,7 +2586,7 @@ server.registerTool(
          + 'NOT, and the right tool to answer support-style questions instead of guessing. Returns a structured knowledge '
          + 'slice: matching capabilities (each with what it does, when to use it, and an example prompt) plus any relevant '
          + 'setup, reasoning, troubleshooting, trust, and pricing context. It reads no account data and never queries an LLM.',
-      inputSchema: {
+      inputSchema: strictShape({
          q: z
             .string()
             .describe(
@@ -2550,7 +2601,7 @@ server.registerTool(
                + '"security") or a section ("setup", "reasoning", "troubleshooting", "trust", "pricing"). '
                + 'Omit to search everything.',
             ),
-      },
+      }),
    },
    async ({ q, topic }) => {
       try {
@@ -2581,13 +2632,13 @@ server.registerTool(
          + 'traffic stays visible and totals reconcile. Human-only by default; set includeBots=true to '
          + 'fold datacenter/bot sessions back in. Requires the s33k.js tracking script installed and '
          + 'UTM-tagged landing URLs.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
          goal: z.string().optional().describe('Optional goal NAME (or pass goalId) to add per-campaign conversions, e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('Optional goal id (alternative to goal name).'),
          includeBots: z.boolean().optional().describe('Include datacenter/bot sessions. Defaults to human-only.'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId, includeBots }) => {
       try {
@@ -2626,7 +2677,7 @@ server.registerTool(
          + 'seo/aio accepted), device (mobile|tablet|desktop), country (ISO), landingPage (exact path), '
          + 'page (a path the session viewed), engagement (engaged|bounced), and humanOnly (exclude '
          + 'datacenter bots). At least one filter is required. Unknown keys are ignored.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain the segment belongs to, e.g. "example.com".'),
          name: z.string().describe('The segment name used in questions, e.g. "AI human converters".'),
          channel: z.string().optional().describe('Traffic channel: direct, referral, organic-search/seo, ai/aio.'),
@@ -2636,7 +2687,7 @@ server.registerTool(
          page: z.string().optional().describe('Restrict to sessions that viewed this path.'),
          engagement: z.enum(['engaged', 'bounced']).optional().describe('Restrict by engagement quality.'),
          humanOnly: z.boolean().optional().describe('Exclude datacenter/bot sessions. Defaults to human-only when applied.'),
-      },
+      }),
    },
    async ({ domain, name, channel, device, country, landingPage, page, engagement, humanOnly }) => {
       try {
@@ -2664,9 +2715,9 @@ server.registerTool(
    {
       title: 'List saved analytics segments',
       description: 'List the named, reusable segments defined for a domain, with their stored filter rules.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain whose segments to list, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -2686,9 +2737,9 @@ server.registerTool(
    {
       title: 'Delete a saved segment',
       description: 'Delete a named segment by its id (get ids from segment_list).',
-      inputSchema: {
+      inputSchema: strictShape({
          id: z.number().describe('The segment id to delete.'),
-      },
+      }),
    },
    async ({ id }) => {
       try {
@@ -2713,12 +2764,12 @@ server.registerTool(
          + 'pagesPerSession, entryPages, and exitPages for the saved cut, plus bot transparency. The '
          + 'segment\'s stored filters are the only filters applied; human-only unless the segment saved '
          + 'humanOnly=false. Use segment_save to create one first, or segment_list to see the names.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          segment: z.string().optional().describe('The segment NAME (or pass segmentId), e.g. "AI human converters".'),
          segmentId: z.number().optional().describe('The segment id (alternative to segment name).'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, segment, segmentId, period }) => {
       try {
@@ -2759,10 +2810,10 @@ server.registerTool(
          + 'domain still returns a coherent, honest overview. The response also includes `rendered`, a ready-to-show monospace ASCII view of the '
          + 'whole dashboard. RULES-BASED: the server does NOT call any LLM. You can narrate the structured `dashboard` richly OR show the raw '
          + '`rendered` block, then offer the suggestedQuestions so the user always knows what to ask next.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to show the overview for, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d", "7d", "90d". Defaults to "30d".'),
-      },
+      }),
    },
    async ({ domain, period }) => {
       try {
@@ -2801,9 +2852,9 @@ server.registerTool(
          + 'installed or no traffic yet), distinguishing that from 0 measured sessions. Domains are sorted by tracked-keyword count, descending. '
          + 'Cross-pillar, pure query over your own data. Never queries an LLM. Drill into one site with striking_distance, page_scoreboard, or '
          + 'channel_report.',
-      inputSchema: {
+      inputSchema: strictShape({
          period: z.string().optional().describe('Reporting window for the traffic half, e.g. "30d", "7d". Defaults to "30d". Lookback is capped at 365 days.'),
-      },
+      }),
    },
    async ({ period }) => {
       try {
@@ -2836,9 +2887,9 @@ server.registerTool(
          + 'average rank, plus a per-keyword "who outranks you" view listing the competitors ranking above your position for each keyword (if you do '
          + 'not rank, position 0, every domain on that SERP outranks you). keywordsAnalyzed counts the tracked keywords that have stored SERP data; '
          + 'when 0, a note explains that competitors appear only after keywords have been refreshed at least once.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain to analyze competitor share of voice for, e.g. "example.com".'),
-      },
+      }),
    },
    async ({ domain }) => {
       try {
@@ -2868,12 +2919,12 @@ server.registerTool(
          + 'sends traffic to that never convert). Honest by design: when a layer has no data it says so '
          + 'rather than fabricate a rate. Requires the '
          + 'tracking script installed and at least one goal.',
-      inputSchema: {
+      inputSchema: strictShape({
          domain: z.string().describe('The domain, e.g. "example.com".'),
          period: z.string().optional().describe('Reporting window, e.g. "30d". Defaults to "30d".'),
          goal: z.string().optional().describe('The goal NAME (or pass goalId), e.g. "Demo Booked".'),
          goalId: z.number().optional().describe('The goal id (alternative to goal name).'),
-      },
+      }),
    },
    async ({ domain, period, goal, goalId }) => {
       try {
