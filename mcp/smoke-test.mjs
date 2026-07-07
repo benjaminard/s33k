@@ -368,7 +368,8 @@ async function main() {
    const READ_DOMAIN = READ_DOMAIN_ENV || firstDomain;
    if (!READ_DOMAIN) {
       console.error('\nFATAL: no domain to read against. Add a domain to your s33k instance first');
-      console.error('(in the web UI, or with the create_domain tool), or set SMOKE_READ_DOMAIN.');
+      console.error('(the create_domain tool, or an authed POST /api/domains {"domains":["example.com"]}),');
+      console.error('or set SMOKE_READ_DOMAIN.');
       finish();
       return;
    }
