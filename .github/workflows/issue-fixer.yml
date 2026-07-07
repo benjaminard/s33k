@@ -1,10 +1,12 @@
 name: issue-fixer
 
-# Autonomous fix agent: when a maintainer labels an issue "bug" or "enhancement", Claude
-# checks out the repo in CI, implements a change that passes the same gates as verify.yml,
-# and opens a PR for human review. The label is both the security boundary and the
-# throttle: only collaborators can add labels, so issue authors cannot trigger a run, and
-# nothing is attempted until a human decides an issue is ready by labeling it.
+# Autonomous fix agent: when a maintainer labels an issue "bug", Claude checks out the
+# repo in CI, implements a fix that passes the same gates as verify.yml, and opens a PR
+# for human review. The label is both the security boundary and the throttle: only
+# collaborators can add labels, so issue authors cannot trigger a run, and nothing is
+# attempted until a human decides an issue is ready by labeling it. Scope is BUGS ONLY
+# on purpose: enhancements and ideas carry design latitude a human should own; use the
+# "idea" label for those so they never trigger a run.
 
 on:
   issues:
@@ -16,7 +18,7 @@ concurrency:
 
 jobs:
   fix:
-    if: contains(fromJSON('["bug", "enhancement"]'), github.event.label.name)
+    if: github.event.label.name == 'bug'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -50,8 +52,7 @@ jobs:
             line 150, secrets from process.env only.
 
             Your task: resolve GitHub issue #${{ github.event.issue.number }} in
-            ${{ github.repository }}. It is labeled either "bug" or "enhancement";
-            check which with gh issue view, it changes step 3.
+            ${{ github.repository }}. It is labeled "bug".
 
             Process, in order:
 
@@ -66,14 +67,12 @@ jobs:
                If an open PR already addresses this issue, comment with a pointer to it
                and stop.
 
-            3. For a BUG: reproduce before fixing. Write a failing test that captures
-               the bug, then implement the smallest fix that makes it pass.
-               For an ENHANCEMENT: implement the smallest version that satisfies what
-               the issue asks for, nothing speculative beyond it, with tests covering
-               the new behavior. If it adds an MCP tool, CLAUDE.md's rules apply in
-               full: a knowledge entry in utils/knowledge.ts and the smoke test's
-               EXPECTED_TOOLS updated, or the build fails.
-               Either way, match the style and idiom of the surrounding code.
+            3. Reproduce before fixing. Write a failing test that captures the bug,
+               then implement the smallest fix that makes it pass. Match the style
+               and idiom of the surrounding code. If the fix touches an MCP tool,
+               CLAUDE.md's rules apply in full: keep the knowledge entry in
+               utils/knowledge.ts and the smoke test's EXPECTED_TOOLS in lockstep,
+               or the build fails.
 
             4. Verification gates. ALL must pass before you open a PR:
                - npx jest --ci        (never npm run test, that is watch mode)
@@ -92,11 +91,9 @@ jobs:
 
             6. Comment on the issue with a link to the PR.
 
-            If you cannot reproduce the bug, or the work requires a product decision the
-            issue does not settle (this bar applies doubly to enhancements: when the
-            issue leaves real design latitude, ask, do not pick), do NOT guess. Comment
-            on the issue with what you found and stop. An honest no-work comment beats
-            a speculative PR.
+            If you cannot reproduce the bug, or the fix requires a product decision the
+            issue does not settle, do NOT guess. Comment on the issue with what you
+            found and stop. An honest no-work comment beats a speculative PR.
           claude_args: |
             --model claude-sonnet-5
             --max-turns 120
