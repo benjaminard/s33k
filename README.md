@@ -107,7 +107,7 @@ The five knowledge resources (`knowledge://capabilities`, `knowledge://setup`, `
 
 ## Install
 
-Two ways to run s33k. Docker is the fastest and is recommended. Either way you stand up the app, its database, and the MCP server on infrastructure you control. Analytics are collected by s33k's own beacon, so there is nothing else to install.
+Two ways to run s33k, and both assume you are comfortable in a terminal: that is who s33k serves best today. Docker is the fastest and is the path we test end to end. Either way you stand up the app, its database, and the MCP server on infrastructure you control. Analytics are collected by s33k's own beacon, so there is nothing else to install.
 
 ### Option A. Docker (recommended)
 
@@ -125,11 +125,11 @@ The last command prints a one-time `[SETUP]` link. Open it once in a browser: op
 
 Prefer to set secrets yourself? Run `cp .env.example .env`, fill it in (`.env.example` documents every variable), then `docker compose up -d --build`.
 
-**One-click cloud deploy.** To run s33k on a host instead of your laptop:
+**One-click cloud deploy (experimental, not yet verified end to end).** To run s33k on a host instead of your laptop, a Render blueprint exists:
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/benjaminard/s33k)
 
-Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you. The one-time `[SETUP]` link prints in the service logs on first boot. **One step after the first deploy:** Render gives your service a public URL like `https://s33k-abc.onrender.com`. Go to the service's environment settings and set `NEXT_PUBLIC_APP_URL` to that exact URL, then let it redeploy. Until you do, the app refuses to boot (on purpose, so links are never built from forgeable request headers). A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
+Be warned: unlike the Docker path above, nobody has verified this button end to end yet, so expect rough edges and please [open an issue](https://github.com/benjaminard/s33k/issues) for anything that breaks. What it should do: Render reads [`render.yaml`](render.yaml) from this repo and provisions the app plus a managed Postgres, generating `APIKEY` and `SECRET` for you. The one-time `[SETUP]` link prints in the service logs on first boot. **One known rough edge, a required step after the first deploy:** Render gives your service a public URL like `https://s33k-abc.onrender.com`. Go to the service's environment settings and set `NEXT_PUBLIC_APP_URL` to that exact URL, then let it redeploy. Until you do, the app refuses to boot (on purpose, so links are never built from forgeable request headers). Making this step unnecessary is [#33](https://github.com/benjaminard/s33k/issues/33). A Railway one-click template can be published from your own Railway dashboard using the same env recipe; see [`DEPLOY.md`](DEPLOY.md).
 
 ### Option B. Run from source (Node 20)
 
